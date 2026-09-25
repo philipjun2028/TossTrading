@@ -1,0 +1,145 @@
+<Window x:Class="TossTrading.App.Views.BotSettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="{Binding Title}" Width="820" Height="720" WindowStartupLocation="CenterOwner"
+        ResizeMode="CanResizeWithGrip" Style="{StaticResource AppWindow}">
+    <Window.Resources>
+        <Style TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+            <Setter Property="Margin" Value="4,0,8,0" />
+            <Setter Property="Foreground" Value="{StaticResource SubText}" />
+        </Style>
+        <Style TargetType="TextBlock" x:Key="Section">
+            <Setter Property="FontWeight" Value="Bold" />
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="Margin" Value="4,12,4,4" />
+            <Setter Property="Foreground" Value="{StaticResource Text}" />
+        </Style>
+    </Window.Resources>
+    <DockPanel Margin="12">
+        <StackPanel DockPanel.Dock="Bottom" Margin="0,8,0,0">
+            <TextBlock Text="{Binding CostHint}" Foreground="{StaticResource Warn}" TextWrapping="Wrap" Margin="4" />
+            <DockPanel>
+                <CheckBox DockPanel.Dock="Left" Content="추가 후 바로 시작" IsChecked="{Binding StartImmediately}"
+                          Visibility="{Binding ShowStartOption, Converter={StaticResource BoolToVis}}" />
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                    <Button Content="비용 점검" Command="{Binding UpdateCostHintCommand}" />
+                    <Button Content="취소" Command="{Binding CancelCommand}" IsCancel="True" />
+                    <Button Content="확인" Style="{StaticResource PrimaryButton}" Command="{Binding OkCommand}" IsDefault="True" />
+                </StackPanel>
+            </DockPanel>
+        </StackPanel>
+
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+            <StackPanel>
+                <!-- 진입 -->
+                <TextBlock Text="① 진입" Style="{StaticResource Section}" />
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="170" /><ColumnDefinition Width="*" /><ColumnDefinition Width="170" /><ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition /><RowDefinition /><RowDefinition /><RowDefinition />
+                    </Grid.RowDefinitions>
+                    <TextBlock Grid.Row="0" Grid.Column="0" Text="운용 모드" />
+                    <ComboBox Grid.Row="0" Grid.Column="1" ItemsSource="{Binding ModeOptions}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding S.Mode}" />
+                    <TextBlock Grid.Row="0" Grid.Column="2" Text="진입 전략" />
+                    <ComboBox Grid.Row="0" Grid.Column="3" ItemsSource="{Binding StrategyOptions}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding S.Strategy}" />
+
+                    <TextBlock Grid.Row="1" Grid.Column="0" Text="진입 허용 시작 (HH:mm)" />
+                    <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding S.EntryStartTime, Converter={StaticResource TimeOnlyConv}}" />
+                    <TextBlock Grid.Row="1" Grid.Column="2" Text="진입 허용 종료 (HH:mm)" />
+                    <TextBox Grid.Row="1" Grid.Column="3" Text="{Binding S.EntryEndTime, Converter={StaticResource TimeOnlyConv}}" />
+
+                    <TextBlock Grid.Row="2" Grid.Column="0" Text="매수가 = 매도1호가 + N틱" />
+                    <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding S.EntrySlippageTicks}" />
+                    <TextBlock Grid.Row="2" Grid.Column="2" Text="매수 미체결 취소 (초)" />
+                    <TextBox Grid.Row="2" Grid.Column="3" Text="{Binding S.EntryTimeoutSeconds}" />
+
+                    <TextBlock Grid.Row="3" Grid.Column="0" Text="ORB 시가범위 (분)" />
+                    <TextBox Grid.Row="3" Grid.Column="1" Text="{Binding S.OrbMinutes}" />
+                </Grid>
+
+                <!-- 자금 -->
+                <TextBlock Text="② 자금 (포지션 사이징)" Style="{StaticResource Section}" />
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="170" /><ColumnDefinition Width="*" /><ColumnDefinition Width="170" /><ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition /><RowDefinition />
+                    </Grid.RowDefinitions>
+                    <TextBlock Grid.Row="0" Grid.Column="0" Text="사이징 방식" />
+                    <ComboBox Grid.Row="0" Grid.Column="1" ItemsSource="{Binding SizingOptions}" DisplayMemberPath="Label" SelectedValuePath="Value" SelectedValue="{Binding S.Sizing}" />
+                    <TextBlock Grid.Row="0" Grid.Column="2" Text="거래당 리스크 (계좌 %)" />
+                    <TextBox Grid.Row="0" Grid.Column="3" Text="{Binding S.RiskPerTradePct}" ToolTip="손절 시 잃는 금액 = 계좌 × 이 % (리스크 기반)" />
+
+                    <TextBlock Grid.Row="1" Grid.Column="0" Text="고정 투입금 (원)" />
+                    <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding S.FixedAmount, StringFormat={}{0:0}}" />
+                    <TextBlock Grid.Row="1" Grid.Column="2" Text="봇 최대 투입금 (원)" />
+                    <TextBox Grid.Row="1" Grid.Column="3" Text="{Binding S.MaxPositionAmount, StringFormat={}{0:0}}" ToolTip="봇 목표/손실 % 의 기준 금액" />
+                </Grid>
+
+                <!-- 청산 -->
+                <TextBlock Text="③ 청산 규칙" Style="{StaticResource Section}" />
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="170" /><ColumnDefinition Width="*" /><ColumnDefinition Width="170" /><ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition /><RowDefinition /><RowDefinition /><RowDefinition /><RowDefinition /><RowDefinition />
+                    </Grid.RowDefinitions>
+                    <TextBlock Grid.Row="0" Grid.Column="0" Text="손절 %" />
+                    <TextBox Grid.Row="0" Grid.Column="1" Text="{Binding S.StopLossPct}" />
+                    <CheckBox Grid.Row="0" Grid.Column="2" Grid.ColumnSpan="2" Content="전략의 구조적 손절 우선 (ORB 저가, 박스 하단 등)" IsChecked="{Binding S.UseStructuralStop}" />
+
+                    <TextBlock Grid.Row="1" Grid.Column="0" Text="1차 분할 익절 % (0=끔)" />
+                    <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding S.PartialTakeProfitPct}" />
+                    <TextBlock Grid.Row="1" Grid.Column="2" Text="1차 매도 비율 %" />
+                    <TextBox Grid.Row="1" Grid.Column="3" Text="{Binding S.PartialTakeProfitRatioPct}" />
+
+                    <TextBlock Grid.Row="2" Grid.Column="0" Text="최종 목표 익절 % (0=끔)" />
+                    <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding S.TakeProfitPct}" />
+                    <CheckBox Grid.Row="2" Grid.Column="2" Grid.ColumnSpan="2" Content="+1R 도달 시 손절을 본절(비용 포함)로 이동" IsChecked="{Binding S.MoveStopToBreakEven}" />
+
+                    <TextBlock Grid.Row="3" Grid.Column="0" Text="트레일링 활성화 % (0=끔)" />
+                    <TextBox Grid.Row="3" Grid.Column="1" Text="{Binding S.TrailingActivationPct}" />
+                    <TextBlock Grid.Row="3" Grid.Column="2" Text="트레일링 폭 (고점 대비 %)" />
+                    <TextBox Grid.Row="3" Grid.Column="3" Text="{Binding S.TrailingDistancePct}" />
+
+                    <TextBlock Grid.Row="4" Grid.Column="0" Text="타임스탑 (분, 0=끔)" />
+                    <TextBox Grid.Row="4" Grid.Column="1" Text="{Binding S.TimeStopMinutes}" />
+                    <TextBlock Grid.Row="4" Grid.Column="2" Text="타임스탑 최소 진척 (R)" />
+                    <TextBox Grid.Row="4" Grid.Column="3" Text="{Binding S.TimeStopMinProgressR}" />
+
+                    <TextBlock Grid.Row="5" Grid.Column="0" Text="강제 청산 시각 (HH:mm)" />
+                    <TextBox Grid.Row="5" Grid.Column="1" Text="{Binding S.ForceExitTime, Converter={StaticResource TimeOnlyConv}}" />
+                    <TextBlock Grid.Row="5" Grid.Column="2" Text="매도 미체결→시장가 (초)" />
+                    <TextBox Grid.Row="5" Grid.Column="3" Text="{Binding S.ExitTimeoutSeconds}" />
+                </Grid>
+
+                <!-- 목표/정지 -->
+                <TextBlock Text="④ 봇 목표 · 정지 조건" Style="{StaticResource Section}" />
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="170" /><ColumnDefinition Width="*" /><ColumnDefinition Width="170" /><ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions>
+                        <RowDefinition /><RowDefinition />
+                    </Grid.RowDefinitions>
+                    <TextBlock Grid.Row="0" Grid.Column="0" Text="봇 목표 수익 % (도달 시 종료)" />
+                    <TextBox Grid.Row="0" Grid.Column="1" Text="{Binding S.BotTargetProfitPct}" ToolTip="누적 순실현손익 ≥ 최대 투입금 × % 이면 봇 완료" />
+                    <TextBlock Grid.Row="0" Grid.Column="2" Text="봇 손실 한도 % (도달 시 정지)" />
+                    <TextBox Grid.Row="0" Grid.Column="3" Text="{Binding S.BotMaxLossPct}" />
+
+                    <TextBlock Grid.Row="1" Grid.Column="0" Text="최대 진입 횟수" />
+                    <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding S.MaxEntries}" />
+                    <TextBlock Grid.Row="1" Grid.Column="2" Text="재진입 쿨다운 (초)" />
+                    <TextBox Grid.Row="1" Grid.Column="3" Text="{Binding S.CooldownSeconds}" />
+                </Grid>
+
+                <TextBlock Margin="4,14,4,0" TextWrapping="Wrap" Foreground="{StaticResource SubText}" FontSize="11"
+                           Text="※ 퍼센트는 모두 매수 평균가 대비입니다. 계좌 전체 한도(일 손실 한도, 동시 보유 수, 총 노출)는 [설정 → 리스크]에서 관리하며 봇 설정보다 우선합니다." />
+            </StackPanel>
+        </ScrollViewer>
+    </DockPanel>
+</Window>

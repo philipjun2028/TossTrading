@@ -1,0 +1,705 @@
+using System.Collections.Concurrent;
+using System.Threading.Channels;
+using TossTrading.Domain;
+using TossTrading.Engine.Infrastructure;
+using TossTrading.Engine.Market;
+using TossTrading.Engine.Paper;
+using TossTrading.Engine.Risk;
+using TossTrading.Engine.Scanning;
+using TossTrading.Engine.Strategies;
+using TossTrading.Engine.Trading;
+
+namespace TossTrading.Engine;
+
+public sealed class EngineOptions
+{
+    public ExecutionMode Execution { get; set; } = ExecutionMode.Paper;
+    public DataSourceKind DataSource { get; set; } = DataSourceKind.Simulation;
+    public RiskSettings Risk { get; set; } = new();
+    public ScannerSettings Scanner { get; set; } = new();
+    public CostSettings Cost { get; set; } = new();
+
+    /// <summary>로그/거래기록/틱기록 저장 폴더 (null 이면 저장 안 함)</summary>
+    public string? DataDirectory { get; set; }
+    public bool RecordTicks { get; set; }
+
+    /// <summary>주문 호출 한도 (초당). 공개 자료의 대략치보다 낮게 잡는다.</summary>
+    public int OrderRatePerSecond { get; set; } = 5;
+    public int OpeningOrderRatePerSecond { get; set; } = 2;
+
+    /// <summary>웹소켓 구독 토픽 예산 (연결당 100)</summary>
+    public int MaxTopics { get; set; } = 95;
+
+    /// <summary>계좌 평가액 대신 사용할 운용 기준 금액 (0 = 실제 계좌 평가액)</summary>
+    public decimal CapitalOverride { get; set; }
+
+    public bool RunScanner { get; set; } = true;
+}
+
+/// <summary>
+/// 엔진 오케스트레이터. 모든 상태 변경은 단일 이벤트 루프 스레드에서 순차 처리된다
+/// (시세·주문 이벤트·사용자 명령·타이머를 하나의 채널로 직렬화 → 락 없는 봇 로직).
+/// UI 는 <see cref="Snapshot"/> 을 주기적으로 읽기만 한다.
+/// </summary>
+public sealed class TradingEngine : IBotHost, IAsyncDisposable
+{
+    private sealed class TrackedOrder
+    {
+        public required string ClientOrderId { get; init; }
+        public required string BotId { get; init; }
+        public required string Symbol { get; init; }
+        public required OrderSide Side { get; init; }
+        public decimal ReservedAmount { get; set; }
+        public string? CurrentOrderId { get; set; }
+        public bool Done { get; set; }
+        public Dictionary<string, (decimal Filled, decimal Value)> PerOrder { get; } = new();
+    }
+
+    private readonly EngineOptions _options;
+    private readonly IMarketDataFeed _feed;
+    private readonly IMarketDataSource _source;
+    private readonly IBroker _broker;
+    private readonly IClock _clock;
+    private readonly PaperBroker? _paper;
+    private readonly Channel<Action> _inbox = Channel.CreateUnbounded<Action>(new UnboundedChannelOptions { SingleReader = true });
+    private readonly EngineLog _log;
+    private readonly TradeJournal _journal;
+    private readonly TickRecorder? _recorder;
+    private readonly OrderManager _orders;
+    private readonly ScannerService _scanner;
+    private readonly RiskManager _risk;
+    private readonly CostModel _cost;
+
+    // ---- 루프 스레드 전용 상태
+    private readonly Dictionary<string, SymbolContext> _contexts = new();
+    private readonly List<TradingBot> _bots = new();
+    private readonly Dictionary<string, TrackedOrder> _byClient = new();
+    private readonly Dictionary<string, TrackedOrder> _byOrderId = new();
+    private readonly Dictionary<string, (DateTimeOffset At, List<OrderUpdate> Updates)> _unmatched = new();
+    private readonly List<ClosedTrade> _closed = new();
+    private readonly Dictionary<string, bool> _seeded = new(); // 종목 → 전체 보강 여부
+    private IReadOnlyList<ScanCandidate> _candidates = Array.Empty<ScanCandidate>();
+    private AccountSnapshot _account = new(0, Array.Empty<Holding>(), Array.Empty<OrderUpdate>());
+    private string? _focus;
+    private string _status = "중지됨";
+    private bool _feedConnected;
+    private bool _wasDisconnected;
+    private int _botSeq;
+    private DateTimeOffset _lastSecond, _lastAccountRefresh;
+    private (HashSet<string> Trades, HashSet<string> Books) _subs = (new(), new());
+
+    private readonly ConcurrentDictionary<string, LiveMetrics> _liveMetrics = new();
+    private CancellationTokenSource? _cts;
+    private Task? _loop, _timer;
+    private volatile EngineSnapshot _snapshot = EngineSnapshot.Empty;
+
+    public TradingEngine(EngineOptions options, IMarketDataFeed feed, IMarketDataSource source, IBroker broker, IClock clock)
+    {
+        _options = options;
+        _feed = feed;
+        _source = source;
+        _broker = broker;
+        _clock = clock;
+        _paper = broker as PaperBroker;
+        _cost = new CostModel(options.Cost);
+        _risk = new RiskManager(options.Risk);
+
+        var dir = options.DataDirectory;
+        _log = new EngineLog(dir is null ? null : Path.Combine(dir, "logs"), () => _clock.Now);
+        _journal = new TradeJournal(dir is null ? null : Path.Combine(dir, "journal"));
+        if (options.RecordTicks && dir is not null) _recorder = new TickRecorder(Path.Combine(dir, "ticks"));
+
+        _orders = new OrderManager(broker, OrderRateLimit, r => Post(() => HandleJobResult(r)), (l, m) => _log.Write(l, "주문", m));
+        _scanner = new ScannerService(source, clock, options.Scanner,
+            sym => _liveMetrics.TryGetValue(sym, out var m) ? m : null,
+            list => Post(() => HandleCandidates(list)),
+            (l, m) => _log.Write(l, "스캐너", m));
+
+        _feed.Trade += t => Post(() => HandleTrade(t));
+        _feed.OrderBook += b => Post(() => HandleBook(b));
+        _feed.ConnectionChanged += (c, msg) => Post(() => HandleConnection(c, msg));
+        _broker.OrderUpdated += u => Post(() => HandleOrderUpdate(u));
+    }
+
+    public EngineSnapshot Snapshot => _snapshot;
+    public bool IsRunning => _loop is not null;
+    public EngineLog EventLog => _log;
+
+    // ================================================================ 수명주기
+
+    public async Task StartAsync(CancellationToken ct = default)
+    {
+        if (_loop is not null) return;
+        _cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        _loop = Task.Run(() => LoopAsync(_cts.Token));
+        _status = "시작 중";
+        _log.Write(LogLevel.Info, "엔진", $"시작: 데이터={_options.DataSource}, 주문={_options.Execution} ({_broker.Name})");
+
+        await _broker.StartAsync(_cts.Token).ConfigureAwait(false);
+        var snap = await _broker.GetAccountSnapshotAsync(_cts.Token).ConfigureAwait(false);
+        Post(() =>
+        {
+            _account = snap;
+            _risk.SetStartEquity(_options.CapitalOverride > 0 ? _options.CapitalOverride : snap.Equity);
+            _log.Write(LogLevel.Info, "엔진", $"운용 기준 금액 {_risk.StartEquity:N0}원 (예수금 {snap.Cash:N0})");
+        });
+
+        _orders.Start();
+        await _feed.StartAsync(_cts.Token).ConfigureAwait(false);
+        if (_options.RunScanner) _scanner.Start();
+        _timer = Task.Run(() => TimerAsync(_cts.Token));
+        Post(() => _status = "실행 중");
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        _cts?.Cancel();
+        await _scanner.DisposeAsync().ConfigureAwait(false);
+        await _orders.DisposeAsync().ConfigureAwait(false);
+        await _feed.DisposeAsync().ConfigureAwait(false);
+        await _broker.DisposeAsync().ConfigureAwait(false);
+        _inbox.Writer.TryComplete();
+        foreach (var t in new[] { _loop, _timer })
+        {
+            if (t is null) continue;
+            try { await t.ConfigureAwait(false); } catch { /* 종료 */ }
+        }
+        if (_recorder is not null) await _recorder.DisposeAsync().ConfigureAwait(false);
+        await _log.DisposeAsync().ConfigureAwait(false);
+        _snapshot = _snapshot with { Running = false, Status = "중지됨" };
+    }
+
+    private void Post(Action action) => _inbox.Writer.TryWrite(action);
+
+    /// <summary>루프 스레드에서 실행하고 결과를 기다린다 (UI 명령용).</summary>
+    private Task<T> Invoke<T>(Func<T> func)
+    {
+        var tcs = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+        Post(() =>
+        {
+            try { tcs.SetResult(func()); }
+            catch (Exception ex) { tcs.SetException(ex); }
+        });
+        return tcs.Task;
+    }
+
+    private async Task LoopAsync(CancellationToken ct)
+    {
+        var reader = _inbox.Reader;
+        try
+        {
+            while (await reader.WaitToReadAsync(ct).ConfigureAwait(false))
+            {
+                while (reader.TryRead(out var action))
+                {
+                    try { action(); }
+                    catch (Exception ex) { _log.Write(LogLevel.Error, "엔진", $"처리 오류: {ex.Message}"); }
+                }
+            }
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    private async Task TimerAsync(CancellationToken ct)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(250));
+        try
+        {
+            while (await timer.WaitForNextTickAsync(ct).ConfigureAwait(false)) Post(OnTimer);
+        }
+        catch (OperationCanceledException) { }
+    }
+
+    /// <summary>테스트용: 대기 중인 이벤트를 모두 처리할 때까지 기다린다.</summary>
+    public Task FlushAsync() => Invoke(() => true);
+
+    /// <summary>테스트용: 타이머 한 번을 즉시 실행한다.</summary>
+    public Task TickAsync() => Invoke(() => { OnTimer(); return true; });
+
+    // ================================================================ 명령 (스레드 안전)
+
+    public Task<string> AddBotAsync(string symbol, string? name, BotSettings settings) => Invoke(() =>
+    {
+        var errors = settings.Validate();
+        if (errors.Count > 0) throw new InvalidOperationException(string.Join("\n", errors));
+        if (_bots.Any(b => b.Symbol == symbol && !b.State.IsFinished()))
+            throw new InvalidOperationException($"{symbol} 에 이미 실행 중인 봇이 있습니다.");
+
+        var ctx = EnsureContext(symbol, name, full: true);
+        var bot = new TradingBot($"{symbol}#{++_botSeq}", ctx, settings, this);
+        _bots.Add(bot);
+        _focus ??= symbol;
+        RecomputeSubscriptions();
+        _log.Write(LogLevel.Info, bot.Id, $"봇 추가: {ctx.Name} [{EntrySignalFactory.DisplayName(settings.Strategy)} / {settings.Mode}]");
+        return bot.Id;
+    });
+
+    public Task StartBotAsync(string id) => WithBot(id, b => b.Start());
+    public Task StopBotAsync(string id, bool flatten) => WithBot(id, b => b.Stop(flatten));
+    public Task ManualBuyAsync(string id) => WithBot(id, b => b.ManualBuy());
+    public Task ApproveSignalAsync(string id) => WithBot(id, b => b.ApproveSignal());
+    public Task RejectSignalAsync(string id) => WithBot(id, b => b.RejectSignal());
+    public Task FlattenBotAsync(string id) => WithBot(id, b => b.Flatten("수동 청산", emergency: false));
+    public Task UpdateBotSettingsAsync(string id, BotSettings s) => WithBot(id, b =>
+    {
+        var errors = s.Validate();
+        if (errors.Count > 0) throw new InvalidOperationException(string.Join("\n", errors));
+        b.UpdateSettings(s);
+    });
+
+    public Task RemoveBotAsync(string id) => Invoke(() =>
+    {
+        var bot = FindBot(id);
+        if (bot.HasPosition || bot.HasWorkingOrders)
+            throw new InvalidOperationException("보유/미체결 주문이 있는 봇은 삭제할 수 없습니다. 먼저 정지(청산)하세요.");
+        _bots.Remove(bot);
+        RecomputeSubscriptions();
+        return true;
+    });
+
+    /// <summary>킬스위치: 전 봇 정지 + 미체결 취소 + 보유 시장가 청산 + 신규 진입 차단</summary>
+    public Task KillSwitchAsync() => Invoke(() =>
+    {
+        _risk.ActivateKillSwitch();
+        foreach (var b in _bots) b.Kill();
+        _log.Write(LogLevel.Error, "리스크", "■ 킬스위치 작동: 전 봇 정지 및 보유분 시장가 청산");
+        return true;
+    });
+
+    public Task ResetKillSwitchAsync() => Invoke(() => { _risk.ResetKillSwitch(); _log.Write(LogLevel.Warn, "리스크", "킬스위치 해제"); return true; });
+
+    public Task SetFocusAsync(string? symbol) => Invoke(() => { _focus = symbol; return true; });
+
+    public Task UpdateRiskAsync(RiskSettings s) => Invoke(() => { _risk.UpdateSettings(s); return true; });
+
+    public void UpdateScanner(ScannerSettings s) => _scanner.UpdateSettings(s);
+
+    private Task WithBot(string id, Action<TradingBot> action) => Invoke(() => { action(FindBot(id)); return true; });
+
+    private TradingBot FindBot(string id) =>
+        _bots.FirstOrDefault(b => b.Id == id) ?? throw new InvalidOperationException($"봇 {id} 없음");
+
+    // ================================================================ 이벤트 처리 (루프 스레드)
+
+    private void HandleTrade(TradeTick t)
+    {
+        if (!_contexts.TryGetValue(t.Symbol, out var ctx)) return;
+        var barClosed = ctx.OnTrade(t);
+        _paper?.OnTrade(t);
+        _recorder?.Record(t);
+        foreach (var bot in _bots)
+        {
+            if (bot.Symbol != t.Symbol) continue;
+            if (barClosed) bot.OnMarket(SignalTrigger.BarClosed);
+            bot.OnMarket(SignalTrigger.Trade);
+        }
+    }
+
+    private void HandleBook(OrderBookSnapshot b)
+    {
+        if (_contexts.TryGetValue(b.Symbol, out var ctx)) ctx.OnOrderBook(b);
+        _paper?.OnOrderBook(b);
+        _recorder?.Record(b);
+    }
+
+    private void HandleConnection(bool connected, string message)
+    {
+        _feedConnected = connected;
+        _log.Write(connected ? LogLevel.Info : LogLevel.Warn, "시세", message);
+        if (!connected)
+        {
+            _wasDisconnected = true;
+            foreach (var b in _bots) b.Suspend("시세 연결 끊김");
+            return;
+        }
+        if (_wasDisconnected)
+        {
+            _wasDisconnected = false;
+            _ = ReconcileAsync();
+        }
+    }
+
+    /// <summary>재연결 후 계좌 기준 재동기화 (설계 문서 3.5, 7.3)</summary>
+    private async Task ReconcileAsync()
+    {
+        try
+        {
+            var snap = await _broker.GetAccountSnapshotAsync(_cts?.Token ?? default).ConfigureAwait(false);
+            Post(() =>
+            {
+                _account = snap;
+                foreach (var bot in _bots)
+                {
+                    if (bot.HasWorkingOrders) continue;
+                    var h = snap.Holdings.FirstOrDefault(x => x.Symbol == bot.Symbol);
+                    if (bot.HasPosition || h is not null) bot.Reconcile(h?.Quantity ?? 0, h?.AveragePrice ?? 0);
+                }
+                foreach (var b in _bots) b.Resume();
+                _log.Write(LogLevel.Info, "엔진", "재동기화 완료 → 봇 재개");
+            });
+        }
+        catch (Exception ex)
+        {
+            _log.Write(LogLevel.Error, "엔진", $"재동기화 실패 (봇 일시중단 유지): {ex.Message}");
+        }
+    }
+
+    private void HandleOrderUpdate(OrderUpdate u)
+    {
+        if (!_byOrderId.TryGetValue(u.OrderId, out var tracked))
+        {
+            // 주문 응답(ack)보다 체결 이벤트가 먼저 올 수 있다 → 잠시 보관
+            if (!_unmatched.TryGetValue(u.OrderId, out var list))
+                _unmatched[u.OrderId] = list = (_clock.Now, new List<OrderUpdate>());
+            list.Updates.Add(u);
+            return;
+        }
+        ApplyUpdate(tracked, u);
+    }
+
+    private void ApplyUpdate(TrackedOrder tracked, OrderUpdate u)
+    {
+        var bot = _bots.FirstOrDefault(b => b.Id == tracked.BotId);
+        tracked.PerOrder.TryGetValue(u.OrderId, out var prev);
+        var delta = u.FilledQuantity - prev.Filled;
+        if (delta > 0)
+        {
+            var value = u.FilledQuantity * (u.AverageFilledPrice ?? u.Price ?? 0);
+            var price = (value - prev.Value) / delta;
+            if (price <= 0) price = u.AverageFilledPrice ?? u.Price ?? 0;
+            tracked.PerOrder[u.OrderId] = (u.FilledQuantity, value);
+            if (tracked.Side == OrderSide.Buy) tracked.ReservedAmount = Math.Max(0, tracked.ReservedAmount - delta * price);
+            bot?.OnFill(tracked.ClientOrderId, tracked.Side, delta, price);
+        }
+        else if (!tracked.PerOrder.ContainsKey(u.OrderId))
+        {
+            tracked.PerOrder[u.OrderId] = (0, 0);
+        }
+
+        if (u.Status is OrderStatus.Filled or OrderStatus.Canceled or OrderStatus.Rejected
+            && u.OrderId == tracked.CurrentOrderId && !tracked.Done)
+        {
+            tracked.Done = true;
+            tracked.ReservedAmount = 0;
+            if (u.Status == OrderStatus.Rejected) _log.Write(LogLevel.Error, tracked.BotId, $"주문 거부: {u.Message}");
+            bot?.OnOrderDone(tracked.ClientOrderId, u.Status, u.Message);
+        }
+    }
+
+    private void HandleJobResult(OrderJobResult r)
+    {
+        if (!_byClient.TryGetValue(r.Job.ClientOrderId, out var tracked)) return;
+        var bot = _bots.FirstOrDefault(b => b.Id == tracked.BotId);
+
+        if (r.Ack is not null)
+        {
+            if (r.Job.Kind is OrderJobKind.Place or OrderJobKind.Modify && r.Ack.OrderId != tracked.CurrentOrderId)
+            {
+                tracked.CurrentOrderId = r.Ack.OrderId;
+                _byOrderId[r.Ack.OrderId] = tracked;
+                if (_unmatched.Remove(r.Ack.OrderId, out var pending))
+                    foreach (var u in pending.Updates) ApplyUpdate(tracked, u);
+            }
+            return;
+        }
+
+        switch (r.Job.Kind)
+        {
+            case OrderJobKind.Place:
+                tracked.Done = true;
+                tracked.ReservedAmount = 0;
+                if (r.ErrorCode == "canceled-before-send") bot?.OnOrderDone(tracked.ClientOrderId, OrderStatus.Canceled, r.Error);
+                else
+                {
+                    _log.Write(LogLevel.Error, tracked.BotId, $"주문 실패 [{r.ErrorCode}] {r.Error}");
+                    bot?.OnOrderSubmitFailed(tracked.ClientOrderId, r.Error ?? "주문 실패");
+                }
+                break;
+            case OrderJobKind.Modify:
+                _log.Write(LogLevel.Warn, tracked.BotId, $"정정 실패 [{r.ErrorCode}] {r.Error}");
+                if (!tracked.Done && r.ErrorCode is not ("already-filled" or "already-canceled"))
+                    _orders.Enqueue(new OrderJob(OrderJobKind.Cancel, tracked.ClientOrderId, OrderPriority.CancelOrModify));
+                break;
+            case OrderJobKind.Cancel:
+                if (r.ErrorCode is not ("already-filled" or "already-canceled"))
+                    _log.Write(LogLevel.Warn, tracked.BotId, $"취소 실패 [{r.ErrorCode}] {r.Error}");
+                break;
+        }
+    }
+
+    private void HandleCandidates(IReadOnlyList<ScanCandidate> list)
+    {
+        _candidates = list;
+        foreach (var c in list)
+            if (_contexts.TryGetValue(c.Symbol, out var ctx) && ctx.Name == ctx.Symbol) ctx.Name = c.Name;
+        RecomputeSubscriptions();
+    }
+
+    private void OnTimer()
+    {
+        var now = _clock.Now;
+
+        foreach (var ctx in _contexts.Values)
+        {
+            if (!ctx.OnTimer(now)) continue;
+            foreach (var bot in _bots)
+                if (bot.Symbol == ctx.Symbol) bot.OnMarket(SignalTrigger.BarClosed);
+        }
+
+        if ((now - _lastSecond).TotalMilliseconds >= 1000)
+        {
+            _lastSecond = now;
+            foreach (var bot in _bots) bot.OnTimer();
+
+            var unrealized = _bots.Sum(b => b.UnrealizedNet);
+            if (_risk.CheckDailyLimits(unrealized))
+            {
+                _log.Write(LogLevel.Error, "리스크", $"일 손실 한도 {_risk.Settings.DailyLossLimitPct}% 도달 → 신규 진입 중지");
+                if (_risk.Settings.FlattenOnDailyLossLimit)
+                    foreach (var b in _bots) b.Flatten("일 손실 한도", emergency: false);
+            }
+
+            foreach (var key in _unmatched.Where(kv => now - kv.Value.At > TimeSpan.FromMinutes(2)).Select(kv => kv.Key).ToList())
+                _unmatched.Remove(key);
+        }
+
+        var refresh = _options.Execution == ExecutionMode.Live ? TimeSpan.FromSeconds(5) : TimeSpan.FromSeconds(2);
+        if (now - _lastAccountRefresh >= refresh || now < _lastAccountRefresh)
+        {
+            _lastAccountRefresh = now;
+            _ = RefreshAccountAsync();
+        }
+
+        UpdateLiveMetrics();
+        PublishSnapshot(now);
+    }
+
+    private async Task RefreshAccountAsync()
+    {
+        try
+        {
+            var snap = await _broker.GetAccountSnapshotAsync(_cts?.Token ?? default).ConfigureAwait(false);
+            Post(() => _account = snap);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _log.Write(LogLevel.Warn, "계좌", $"계좌 조회 실패: {ex.Message}");
+        }
+    }
+
+    // ================================================================ 구독/컨텍스트
+
+    private SymbolContext EnsureContext(string symbol, string? name, bool full)
+    {
+        if (!_contexts.TryGetValue(symbol, out var ctx))
+        {
+            var cand = _candidates.FirstOrDefault(c => c.Symbol == symbol);
+            ctx = new SymbolContext(symbol, name ?? cand?.Name ?? _scanner.NameOf(symbol) ?? symbol);
+            _contexts[symbol] = ctx;
+            _paper?.SetName(symbol, ctx.Name);
+        }
+        else if (!string.IsNullOrEmpty(name))
+        {
+            ctx.Name = name;
+        }
+        // 스캐너 후보는 분봉(VWAP 복원)만, 봇 종목은 상하한가·호가·전일종가·종목명까지 보강 (호출 한도 절약)
+        var seededFull = _seeded.TryGetValue(symbol, out var f) ? f : (bool?)null;
+        if (seededFull is null || (full && seededFull == false))
+        {
+            _seeded[symbol] = full;
+            _ = SeedAsync(symbol, includeBars: seededFull is null, full);
+        }
+        return ctx;
+    }
+
+    /// <summary>늦게 시작한 종목의 당일 분봉 복원 (+ 봇 종목은 상하한가·호가·전일종가·종목명)</summary>
+    private async Task SeedAsync(string symbol, bool includeBars, bool full)
+    {
+        var ct = _cts?.Token ?? default;
+        try
+        {
+            var bars = includeBars ? await _source.GetTodayMinuteBarsAsync(symbol, ct).ConfigureAwait(false) : Array.Empty<Bar>();
+            PriceLimits? limits = null;
+            OrderBookSnapshot? book = null;
+            IReadOnlyList<Bar> daily = Array.Empty<Bar>();
+            StockInfo? info = null;
+            if (full)
+            {
+                limits = await _source.GetPriceLimitsAsync(symbol, ct).ConfigureAwait(false);
+                book = await _source.GetOrderBookAsync(symbol, ct).ConfigureAwait(false);
+                daily = await _source.GetDailyBarsAsync(symbol, 1, ct).ConfigureAwait(false);
+                info = (await _source.GetStocksAsync(new[] { symbol }, ct).ConfigureAwait(false)).FirstOrDefault();
+            }
+            Post(() =>
+            {
+                if (!_contexts.TryGetValue(symbol, out var ctx)) return;
+                if (bars.Count > 0) ctx.Seed(bars);
+                if (limits is not null) ctx.Limits = limits;
+                if (book is not null && ctx.OrderBook is null) ctx.OnOrderBook(book);
+                if (daily.Count > 0) ctx.PreviousClose ??= daily[^1].Close;
+                if (info is not null && ctx.Name == symbol) { ctx.Name = info.Name; _paper?.SetName(symbol, info.Name); }
+            });
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _log.Write(LogLevel.Warn, symbol, $"초기 데이터 조회 실패: {ex.Message}");
+            Post(() => _seeded.Remove(symbol));
+        }
+    }
+
+    private void RecomputeSubscriptions()
+    {
+        var botSymbols = _bots.Where(b => !b.State.IsFinished() || b.HasPosition).Select(b => b.Symbol).ToHashSet();
+        var trades = new HashSet<string>(botSymbols);
+        var books = new HashSet<string>(botSymbols);
+        var budget = _options.MaxTopics - trades.Count - books.Count;
+
+        foreach (var c in _candidates.Take(_options.Scanner.LiveSubscribeTop))
+        {
+            if (budget <= 0) break;
+            if (trades.Add(c.Symbol)) budget--;
+        }
+        foreach (var c in _candidates.Take(10))
+        {
+            if (budget <= 0) break;
+            if (books.Add(c.Symbol)) budget--;
+        }
+
+        foreach (var s in trades) EnsureContext(s, null, full: botSymbols.Contains(s));
+        foreach (var s in _contexts.Keys.Where(k => !trades.Contains(k)).ToList())
+        {
+            if (_bots.Any(b => b.Symbol == s)) continue;
+            _contexts.Remove(s);
+            _seeded.Remove(s);
+            _liveMetrics.TryRemove(s, out _);
+        }
+
+        if (trades.SetEquals(_subs.Trades) && books.SetEquals(_subs.Books)) return;
+        _subs = (trades, books);
+        var ct = _cts?.Token ?? default;
+        _ = Task.Run(async () =>
+        {
+            try { await _feed.SetSubscriptionsAsync(trades, books, ct).ConfigureAwait(false); }
+            catch (Exception ex) when (ex is not OperationCanceledException) { _log.Write(LogLevel.Warn, "시세", $"구독 변경 실패: {ex.Message}"); }
+        }, ct);
+    }
+
+    private void UpdateLiveMetrics()
+    {
+        foreach (var ctx in _contexts.Values)
+        {
+            if (!ctx.HasData) continue;
+            _liveMetrics[ctx.Symbol] = new LiveMetrics(ctx.LastPrice, ctx.Vwap, ctx.Strength, ctx.OrderBook?.SpreadTicks(ctx.Market), ctx.RangePosition);
+        }
+    }
+
+    // ================================================================ IBotHost
+
+    public DateTimeOffset Now => _clock.Now;
+    public CostModel Cost => _cost;
+    public ExecutionMode Execution => _options.Execution;
+    public int MaxOrderErrorsPerBot => _risk.Settings.MaxOrderErrorsPerBot;
+
+    public string SubmitOrder(TradingBot bot, OrderSide side, OrderType type, decimal quantity, decimal? price, OrderPriority priority, string reason)
+    {
+        var id = OrderRequest.NewClientOrderId();
+        var tracked = new TrackedOrder
+        {
+            ClientOrderId = id, BotId = bot.Id, Symbol = bot.Symbol, Side = side,
+            ReservedAmount = side == OrderSide.Buy ? quantity * (price ?? bot.Context.LastPrice) : 0,
+        };
+        _byClient[id] = tracked;
+        _orders.Enqueue(new OrderJob(OrderJobKind.Place, id, priority,
+            new OrderRequest(id, bot.Symbol, side, type, quantity, type == OrderType.Limit ? price : null, priority, bot.Id, reason)));
+        return id;
+    }
+
+    public void ModifyOrder(TradingBot bot, string clientOrderId, OrderType type, decimal quantity, decimal? price) =>
+        _orders.Enqueue(new OrderJob(OrderJobKind.Modify, clientOrderId, OrderPriority.CancelOrModify,
+            ModifyType: type, ModifyQuantity: quantity, ModifyPrice: type == OrderType.Limit ? price : null));
+
+    public void CancelOrder(TradingBot bot, string clientOrderId) =>
+        _orders.Enqueue(new OrderJob(OrderJobKind.Cancel, clientOrderId, OrderPriority.CancelOrModify));
+
+    public (bool Allowed, string? Reason) CanEnter(TradingBot bot, decimal amount)
+    {
+        var open = _bots.Count(b => b != bot && (b.HasPosition || b.State == BotState.EntryPending));
+        var exposure = _bots.Where(b => b != bot).Sum(b => b.Exposure);
+        return _risk.CanEnter(Now, amount, open, exposure, _bots.Sum(b => b.UnrealizedNet));
+    }
+
+    public decimal SizeFor(TradingBot bot, decimal entryPrice, decimal stopPrice)
+    {
+        var equity = _risk.StartEquity > 0 ? _risk.StartEquity : _account.Equity;
+        var reserved = _byClient.Values.Where(t => !t.Done && t.Side == OrderSide.Buy).Sum(t => t.ReservedAmount);
+        var buyingPower = Math.Max(0, _account.Cash - reserved) / (1 + _cost.CommissionRate);
+        return PositionSizer.Quantity(bot.Settings, equity, entryPrice, stopPrice, buyingPower, _risk.Settings.MaxOrderAmount);
+    }
+
+    public void OnTradeClosed(TradingBot bot, ClosedTrade trade)
+    {
+        _closed.Add(trade);
+        _journal.Append(trade);
+        _risk.OnTradeClosed(trade, Now);
+    }
+
+    public void Log(LogLevel level, string source, string message) => _log.Write(level, source, message);
+
+    private int OrderRateLimit()
+    {
+        var t = Kst.TimeOf(_clock.Now);
+        return t >= Kst.MarketOpen && t < new TimeOnly(9, 10) ? _options.OpeningOrderRatePerSecond : _options.OrderRatePerSecond;
+    }
+
+    // ================================================================ 스냅샷
+
+    private void PublishSnapshot(DateTimeOffset now)
+    {
+        var bots = _bots.Select(b =>
+        {
+            var target = b.TargetAmount;
+            var cost = b.AveragePrice * b.Quantity;
+            return new BotView(
+                b.Id, b.Symbol, b.Context.Name, EntrySignalFactory.DisplayName(b.Settings.Strategy), b.Settings.Mode,
+                b.State, $"{b.State.ToKorean()} · {b.StateReason}", b.Quantity, b.AveragePrice, b.Context.LastPrice, b.StopPrice,
+                b.UnrealizedNet, cost > 0 ? b.UnrealizedNet / cost * 100m : 0, b.RealizedNet, target,
+                target > 0 ? Math.Clamp(b.RealizedNet / target, -1, 1) : 0,
+                b.Entries, b.Settings.MaxEntries, b.Wins, b.Losses, b.PendingSignalText, b.Settings.Clone());
+        }).ToList();
+
+        var unrealized = _bots.Sum(b => b.UnrealizedNet);
+        var exposure = _bots.Sum(b => b.Exposure);
+        var account = new AccountView(_account.Equity, _account.Cash, _risk.StartEquity, _risk.RealizedToday, unrealized, exposure);
+        var risk = new RiskView(_risk.DailyPnlPct(unrealized), _risk.Settings.DailyLossLimitPct,
+            _bots.Count(b => b.HasPosition), _risk.Settings.MaxConcurrentPositions,
+            _risk.BlockReason(now, unrealized) is not null, _risk.BlockReason(now, unrealized), _risk.KillSwitchActive);
+
+        _snapshot = new EngineSnapshot(now, true, _feedConnected, _status, _options.Execution, _options.DataSource,
+            account, risk, bots, _candidates, _closed.ToList(), _log.Recent(), BuildChart());
+    }
+
+    private ChartView? BuildChart()
+    {
+        if (_focus is null || !_contexts.TryGetValue(_focus, out var ctx) || !ctx.HasData) return null;
+        var all = ctx.AllBars().ToList();
+        decimal cv = 0, cvv = 0;
+        var vwap = new List<decimal>(all.Count);
+        foreach (var b in all)
+        {
+            cv += b.Volume;
+            cvv += b.Value > 0 ? b.Value : b.TypicalPrice * b.Volume;
+            vwap.Add(cv > 0 ? cvv / cv : b.Close);
+        }
+        const int keep = 150;
+        var skip = Math.Max(0, all.Count - keep);
+        var lines = new List<ChartLine>();
+        var (hi, lo, complete) = ctx.OpeningRange(5, _clock.Now);
+        if (complete) { lines.Add(new ChartLine(hi, "OR 고가", "or")); lines.Add(new ChartLine(lo, "OR 저가", "or")); }
+        foreach (var bot in _bots.Where(b => b.Symbol == _focus && b.HasPosition))
+        {
+            lines.Add(new ChartLine(bot.AveragePrice, "평균단가", "entry"));
+            if (bot.StopPrice is { } sp) lines.Add(new ChartLine(sp, "손절", "stop"));
+        }
+        return new ChartView(ctx.Symbol, ctx.Name, all.Skip(skip).Select(b => b.Clone()).ToList(), vwap.Skip(skip).ToList(), lines);
+    }
+}

@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.0" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\TossTrading.Domain\TossTrading.Domain.csproj" />
+    <ProjectReference Include="..\TossTrading.Engine\TossTrading.Engine.csproj" />
+    <ProjectReference Include="..\TossTrading.Toss\TossTrading.Toss.csproj" />
+  </ItemGroup>
+</Project>
