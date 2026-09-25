@@ -4,16 +4,46 @@
              xmlns:c="clr-namespace:TossTrading.App.Converters"
              ShutdownMode="OnMainWindowClose">
     <Application.Resources>
-        <ResourceDictionary>
-            <ResourceDictionary.MergedDictionaries>
-                <ResourceDictionary Source="Themes/Dark.xaml" />
-            </ResourceDictionary.MergedDictionaries>
+        <!-- 테마는 DevExpress Win11Dark (App.xaml.cs). 여기에는 앱 고유 색만 둔다. 국내 관례: 상승 빨강, 하락 파랑 -->
+        <SolidColorBrush x:Key="Up" Color="#FFF04452" />
+        <SolidColorBrush x:Key="Down" Color="#FF3B82F6" />
+        <SolidColorBrush x:Key="Neutral" Color="#FFE6E8EC" />
+        <SolidColorBrush x:Key="Warn" Color="#FFF5A524" />
+        <SolidColorBrush x:Key="Ok" Color="#FF22C55E" />
+        <SolidColorBrush x:Key="SubText" Color="#FF9AA1AD" />
+        <SolidColorBrush x:Key="CardBorder" Color="#33FFFFFF" />
 
-            <c:SignBrushConverter x:Key="SignBrush" />
-            <c:BoolToVisibilityConverter x:Key="BoolToVis" />
-            <c:NullToVisibilityConverter x:Key="NullToVis" />
-            <c:TimeOnlyConverter x:Key="TimeOnlyConv" />
-            <c:ProgressConverter x:Key="Progress" />
-        </ResourceDictionary>
+        <c:SignBrushConverter x:Key="SignBrush" />
+        <c:BoolToVisibilityConverter x:Key="BoolToVis" />
+        <c:NullToVisibilityConverter x:Key="NullToVis" />
+        <c:TimeOnlyConverter x:Key="TimeOnlyConv" />
+        <c:ProgressConverter x:Key="Progress" />
+
+        <Style TargetType="TextBlock" x:Key="Caption">
+            <Setter Property="Foreground" Value="{StaticResource SubText}" />
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+        </Style>
+        <Style TargetType="TextBlock" x:Key="Value">
+            <Setter Property="FontSize" Value="16" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+        <Style TargetType="Border" x:Key="Card">
+            <Setter Property="BorderBrush" Value="{StaticResource CardBorder}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="6" />
+            <Setter Property="Padding" Value="12,8" />
+            <Setter Property="Margin" Value="4" />
+        </Style>
+        <Style TargetType="TextBlock" x:Key="Label">
+            <Setter Property="Margin" Value="4,0,8,0" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="Foreground" Value="{StaticResource SubText}" />
+        </Style>
+        <Style TargetType="TextBlock" x:Key="Section">
+            <Setter Property="FontWeight" Value="Bold" />
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="Margin" Value="4,12,4,4" />
+        </Style>
     </Application.Resources>
 </Application>

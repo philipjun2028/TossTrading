@@ -4,10 +4,22 @@
     <TargetFramework>net10.0-windows</TargetFramework>
     <UseWPF>true</UseWPF>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!--
+      DevExpress 24.1.7 (로컬 설치 패키지 소스 "DevExpress 24.1 Local" 사용).
+      다른 버전으로 빌드하려면: dotnet build -p:DevExpressVersion=24.1.x
+    -->
+    <DevExpressVersion Condition="'$(DevExpressVersion)' == ''">24.1.7</DevExpressVersion>
   </PropertyGroup>
   <ItemGroup>
-    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.0" />
-    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.0" />
+    <PackageReference Include="DevExpress.Wpf.Core" Version="$(DevExpressVersion)" />
+    <PackageReference Include="DevExpress.Wpf.Grid" Version="$(DevExpressVersion)" />
+    <PackageReference Include="DevExpress.Wpf.Charts" Version="$(DevExpressVersion)" />
+    <PackageReference Include="DevExpress.Wpf.Themes.Win11Dark" Version="$(DevExpressVersion)" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- DevExpress 패키지가 WinForms 를 끌어와 Application/UserControl 이름이 겹치므로 WinForms 전역 using 제거 -->
+    <Using Remove="System.Windows.Forms" />
+    <Using Remove="System.Drawing" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\TossTrading.Domain\TossTrading.Domain.csproj" />

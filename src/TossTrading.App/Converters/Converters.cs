@@ -17,7 +17,7 @@ public sealed class SignBrushConverter : IValueConverter
             int i => i,
             _ => 0m,
         };
-        var key = d > 0 ? "Up" : d < 0 ? "Down" : "Text";
+        var key = d > 0 ? "Up" : d < 0 ? "Down" : "Neutral";
         return Application.Current.TryFindResource(key) as Brush ?? Brushes.White;
     }
 

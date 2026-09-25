@@ -1,170 +1,130 @@
-<Window x:Class="TossTrading.App.Views.SettingsWindow"
-        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="설정" Width="860" Height="660" WindowStartupLocation="CenterOwner"
-        ResizeMode="CanResizeWithGrip" Style="{StaticResource AppWindow}">
-    <Window.Resources>
-        <Style TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
-            <Setter Property="Margin" Value="4,0,8,0" />
-            <Setter Property="Foreground" Value="{StaticResource SubText}" />
-        </Style>
-    </Window.Resources>
+<dx:ThemedWindow x:Class="TossTrading.App.Views.SettingsWindow"
+                 xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                 xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                 xmlns:sys="clr-namespace:System;assembly=mscorlib"
+                 xmlns:dx="http://schemas.devexpress.com/winfx/2008/xaml/core"
+                 xmlns:dxe="http://schemas.devexpress.com/winfx/2008/xaml/editors"
+                 Title="설정" Width="900" Height="680" WindowStartupLocation="CenterOwner"
+                 FontFamily="Malgun Gothic">
     <DockPanel Margin="12">
-        <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,8,0,0">
+        <DockPanel DockPanel.Dock="Bottom" Margin="0,8,0,0">
+            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                <Button Content="취소" Command="{Binding CancelCommand}" IsCancel="True" Margin="3" Padding="12,4" />
+                <Button Content="저장" Command="{Binding SaveCommand}" IsDefault="True" Margin="3" Padding="16,4" FontWeight="SemiBold" />
+            </StackPanel>
             <TextBlock Text="※ 엔진 실행 중에는 리스크/스캐너 설정만 즉시 반영되고, 나머지는 다음 시작 때 적용됩니다."
-                       Visibility="{Binding EngineRunning, Converter={StaticResource BoolToVis}}" Margin="0,0,16,0" />
-            <Button Content="취소" Command="{Binding CancelCommand}" IsCancel="True" />
-            <Button Content="저장" Style="{StaticResource PrimaryButton}" Command="{Binding SaveCommand}" IsDefault="True" />
-        </StackPanel>
-
-        <TabControl>
-            <!-- ================= 토스 연결 ================= -->
-            <TabItem Header="토스 연결">
-                <StackPanel Margin="10">
-                    <Grid>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="180" /><ColumnDefinition Width="*" />
-                        </Grid.ColumnDefinitions>
-                        <Grid.RowDefinitions>
-                            <RowDefinition /><RowDefinition /><RowDefinition /><RowDefinition /><RowDefinition />
-                        </Grid.RowDefinitions>
-                        <TextBlock Grid.Row="0" Text="Client ID" />
-                        <TextBox Grid.Row="0" Grid.Column="1" Text="{Binding Settings.TossClientId}" />
-                        <TextBlock Grid.Row="1" Text="Client Secret" />
-                        <DockPanel Grid.Row="1" Grid.Column="1">
-                            <TextBlock DockPanel.Dock="Right" Text="(저장됨 · 바꿀 때만 입력)" Visibility="{Binding HasSavedSecret, Converter={StaticResource BoolToVis}}" />
-                            <PasswordBox x:Name="SecretBox" PasswordChanged="OnSecretChanged" />
-                        </DockPanel>
-                        <TextBlock Grid.Row="2" Text="계좌 (accountSeq)" />
-                        <DockPanel Grid.Row="2" Grid.Column="1">
-                            <Button DockPanel.Dock="Right" Content="연결 테스트 · 계좌 조회" Command="{Binding TestConnectionCommand}" />
-                            <TextBox Text="{Binding AccountSeq}" Width="100" HorizontalAlignment="Left" ToolTip="0 = 첫 위탁계좌 자동 선택" />
-                        </DockPanel>
-                        <TextBlock Grid.Row="3" Text="REST URL" />
-                        <TextBox Grid.Row="3" Grid.Column="1" Text="{Binding Settings.TossBaseUrl}" />
-                        <TextBlock Grid.Row="4" Text="WebSocket URL" />
-                        <TextBox Grid.Row="4" Grid.Column="1" Text="{Binding Settings.TossWebSocketUrl}" />
-                    </Grid>
-                    <TextBlock Text="{Binding ConnectionResult}" TextWrapping="Wrap" Margin="4,10" Foreground="{StaticResource Text}" />
-                    <ItemsControl ItemsSource="{Binding Accounts}" Margin="4,0">
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate>
-                                <TextBlock Text="{Binding}" Foreground="{StaticResource Text}" />
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-                    <TextBlock TextWrapping="Wrap" Margin="4,14,4,0" FontSize="12" LineHeight="20"
-                               Text="준비: ① 토스증권 WTS → 설정 → Open API 에서 Client ID/Secret 발급  ② 같은 메뉴의 [허용 IP 관리]에 이 PC 의 공인 IPv4 등록 (미등록 시 403)  ③ 연결 테스트  ④ 처음에는 '토스 실시간 + 모의 주문'으로 충분히 검증하세요. Secret 은 Windows DPAPI 로 암호화되어 이 PC·이 사용자에서만 복호화됩니다." />
-                </StackPanel>
-            </TabItem>
-
-            <!-- ================= 리스크 ================= -->
-            <TabItem Header="리스크 (계좌)">
-                <Grid Margin="10">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="220" /><ColumnDefinition Width="*" /><ColumnDefinition Width="220" /><ColumnDefinition Width="*" />
-                    </Grid.ColumnDefinitions>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition />
-                    </Grid.RowDefinitions>
-                    <TextBlock Grid.Row="0" Text="일 손실 한도 %" />
-                    <TextBox Grid.Row="0" Grid.Column="1" Text="{Binding Settings.Risk.DailyLossLimitPct}" />
-                    <TextBlock Grid.Row="0" Grid.Column="2" Text="일 목표 수익 % (0=끔)" />
-                    <TextBox Grid.Row="0" Grid.Column="3" Text="{Binding Settings.Risk.DailyProfitTargetPct}" />
-
-                    <TextBlock Grid.Row="1" Text="동시 보유 종목 수" />
-                    <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding Settings.Risk.MaxConcurrentPositions}" />
-                    <TextBlock Grid.Row="1" Grid.Column="2" Text="총 노출 한도 (계좌 %)" />
-                    <TextBox Grid.Row="1" Grid.Column="3" Text="{Binding Settings.Risk.MaxTotalExposurePct}" />
-
-                    <TextBlock Grid.Row="2" Text="1회 주문 상한 (원)" />
-                    <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding Settings.Risk.MaxOrderAmount, StringFormat={}{0:0}}" />
-                    <TextBlock Grid.Row="2" Grid.Column="2" Text="봇당 주문 오류 허용" />
-                    <TextBox Grid.Row="2" Grid.Column="3" Text="{Binding Settings.Risk.MaxOrderErrorsPerBot}" />
-
-                    <TextBlock Grid.Row="3" Text="연속 손실 → 쿨다운" />
-                    <TextBox Grid.Row="3" Grid.Column="1" Text="{Binding Settings.Risk.MaxConsecutiveLosses}" />
-                    <TextBlock Grid.Row="3" Grid.Column="2" Text="쿨다운 (분)" />
-                    <TextBox Grid.Row="3" Grid.Column="3" Text="{Binding Settings.Risk.ConsecutiveLossCooldownMinutes}" />
-
-                    <CheckBox Grid.Row="4" Grid.ColumnSpan="2" Content="일 손실 한도 도달 시 전량 청산" IsChecked="{Binding Settings.Risk.FlattenOnDailyLossLimit}" />
-                    <CheckBox Grid.Row="4" Grid.Column="2" Grid.ColumnSpan="2" Content="09:00~09:05 신규 진입 차단" IsChecked="{Binding Settings.Risk.BlockEntriesDuringOpeningMinutes}" />
-
-                    <TextBlock Grid.Row="5" Text="운용 기준 금액 (0=계좌 평가액)" />
-                    <TextBox Grid.Row="5" Grid.Column="1" Text="{Binding Settings.CapitalOverride, StringFormat={}{0:0}}"
-                             ToolTip="계좌 전체가 아니라 일부만 자동매매에 쓰려면 금액 입력 (리스크 % 의 기준)" />
+                       Visibility="{Binding EngineRunning, Converter={StaticResource BoolToVis}}" VerticalAlignment="Center"
+                       Foreground="{StaticResource SubText}" />
+        </DockPanel>
+        <dx:DXTabControl>
+            <dx:DXTabItem Header="토스 연결">
+                <ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel Margin="8">
+                <TextBlock Text="토스 연결" Style="{StaticResource Section}" />
+                <Grid>
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="190" /><ColumnDefinition Width="*" /><ColumnDefinition Width="190" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                    <TextBlock Grid.Row="0" Grid.Column="0" Text="Client ID" Style="{StaticResource Label}" />
+                    <ContentControl Grid.Row="0" Grid.Column="1" Margin="3"><dxe:TextEdit EditValue="{Binding Settings.TossClientId}" /></ContentControl>
+                    <TextBlock Grid.Row="1" Grid.Column="0" Text="Client Secret (바꿀 때만 입력)" Style="{StaticResource Label}" />
+                    <ContentControl Grid.Row="1" Grid.Column="1" Margin="3"><dxe:PasswordBoxEdit EditValue="{Binding NewClientSecret, UpdateSourceTrigger=PropertyChanged}" NullText="저장된 값 유지" /></ContentControl>
+                    <TextBlock Grid.Row="2" Grid.Column="0" Text="계좌 accountSeq (0=자동)" Style="{StaticResource Label}" />
+                    <ContentControl Grid.Row="2" Grid.Column="1" Margin="3"><dxe:SpinEdit EditValue="{Binding AccountSeq}" EditValueType="{x:Type sys:Int64}" MinValue="0" IsFloatValue="False" /></ContentControl>
+                    <ContentControl Grid.Row="2" Grid.Column="2" Grid.ColumnSpan="2" Margin="3"><Button Content="연결 테스트 · 계좌 조회" Command="{Binding TestConnectionCommand}" Padding="12,4" HorizontalAlignment="Left" /></ContentControl>
+                    <TextBlock Grid.Row="3" Grid.Column="0" Text="REST URL" Style="{StaticResource Label}" />
+                    <ContentControl Grid.Row="3" Grid.Column="1" Margin="3"><dxe:TextEdit EditValue="{Binding Settings.TossBaseUrl}" /></ContentControl>
+                    <TextBlock Grid.Row="4" Grid.Column="0" Text="WebSocket URL" Style="{StaticResource Label}" />
+                    <ContentControl Grid.Row="4" Grid.Column="1" Margin="3"><dxe:TextEdit EditValue="{Binding Settings.TossWebSocketUrl}" /></ContentControl>
                 </Grid>
-            </TabItem>
-
-            <!-- ================= 스캐너 ================= -->
-            <TabItem Header="스캐너">
-                <Grid Margin="10">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="220" /><ColumnDefinition Width="*" /><ColumnDefinition Width="220" /><ColumnDefinition Width="*" />
-                    </Grid.ColumnDefinitions>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition />
-                    </Grid.RowDefinitions>
-                    <TextBlock Grid.Row="0" Text="최소 등락률 %" />
-                    <TextBox Grid.Row="0" Grid.Column="1" Text="{Binding Settings.Scanner.MinChangePct}" />
-                    <TextBlock Grid.Row="0" Grid.Column="2" Text="최대 등락률 %" />
-                    <TextBox Grid.Row="0" Grid.Column="3" Text="{Binding Settings.Scanner.MaxChangePct}" />
-
-                    <TextBlock Grid.Row="1" Text="최소 거래대금 (원, 10시 기준)" />
-                    <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding Settings.Scanner.MinTradingAmount, StringFormat={}{0:0}}" />
-                    <TextBlock Grid.Row="1" Grid.Column="2" Text="최소 RVOL" />
-                    <TextBox Grid.Row="1" Grid.Column="3" Text="{Binding Settings.Scanner.MinRvol}" />
-
-                    <TextBlock Grid.Row="2" Text="최소 가격 (원)" />
-                    <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding Settings.Scanner.MinPrice, StringFormat={}{0:0}}" />
-                    <TextBlock Grid.Row="2" Grid.Column="2" Text="최대 틱 비용률 %" />
-                    <TextBox Grid.Row="2" Grid.Column="3" Text="{Binding Settings.Scanner.MaxTickCostPct}" />
-
-                    <TextBlock Grid.Row="3" Text="최대 스프레드 (틱)" />
-                    <TextBox Grid.Row="3" Grid.Column="1" Text="{Binding Settings.Scanner.MaxSpreadTicks}" />
-                    <TextBlock Grid.Row="3" Grid.Column="2" Text="폴링 주기 (초)" />
-                    <TextBox Grid.Row="3" Grid.Column="3" Text="{Binding Settings.Scanner.PollSeconds}" />
-
-                    <TextBlock Grid.Row="4" Text="후보 최대 개수" />
-                    <TextBox Grid.Row="4" Grid.Column="1" Text="{Binding Settings.Scanner.MaxCandidates}" />
-                    <TextBlock Grid.Row="4" Grid.Column="2" Text="실시간 구독 상위 N" />
-                    <TextBox Grid.Row="4" Grid.Column="3" Text="{Binding Settings.Scanner.LiveSubscribeTop}" />
-
-                    <CheckBox Grid.Row="5" Grid.ColumnSpan="4" Content="보통주만 (ETF/ETN/우선주/워런트 제외)" IsChecked="{Binding Settings.Scanner.ExcludeNonCommonStock}" />
+                <TextBlock Text="{Binding ConnectionResult}" TextWrapping="Wrap" Margin="4,10" />
+                <ItemsControl ItemsSource="{Binding Accounts}" Margin="4,0" />
+                <TextBlock TextWrapping="Wrap" Margin="4,14,4,0" FontSize="12" LineHeight="20" Foreground="{StaticResource SubText}"
+                           Text="준비: ① 토스증권 WTS → 설정 → Open API 에서 Client ID/Secret 발급  ② 같은 메뉴의 [허용 IP 관리]에 이 PC 의 공인 IPv4 등록 (미등록 시 403)  ③ 연결 테스트  ④ 처음에는 '토스 실시간 + 모의 주문'으로 충분히 검증하세요. Secret 은 Windows DPAPI 로 암호화되어 이 PC·이 사용자에서만 복호화됩니다." />
+                </StackPanel></ScrollViewer>
+            </dx:DXTabItem>
+            <dx:DXTabItem Header="리스크 (계좌)">
+                <ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel Margin="8">
+                <TextBlock Text="리스크 (계좌 레벨 — 모든 봇보다 우선)" Style="{StaticResource Section}" />
+                <Grid>
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="190" /><ColumnDefinition Width="*" /><ColumnDefinition Width="190" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                    <TextBlock Grid.Row="0" Grid.Column="0" Text="일 손실 한도 %" Style="{StaticResource Label}" />
+                    <ContentControl Grid.Row="0" Grid.Column="1" Margin="3"><dxe:SpinEdit EditValue="{Binding Settings.Risk.DailyLossLimitPct}" EditValueType="{x:Type sys:Decimal}" Increment="0.1" MinValue="0" DisplayFormatString="0.##" /></ContentControl>
+                    <TextBlock Grid.Row="0" Grid.Column="2" Text="일 목표 수익 % (0=끔)" Style="{StaticResource Label}" />
+                    <ContentControl Grid.Row="0" Grid.Column="3" Margin="3"><dxe:SpinEdit EditValue="{Binding Settings.Risk.DailyProfitTargetPct}" EditValueType="{x:Type sys:Decimal}" Increment="0.1" MinValue="0" DisplayFormatString="0.##" /></ContentControl>
+                    <TextBlock Grid.Row="1" Grid.Column="0" Text="동시 보유 종목 수" Style="{StaticResource Label}" />
+                    <ContentControl Grid.Row="1" Grid.Column="1" Margin="3"><dxe:SpinEdit EditValue="{Binding Settings.Risk.MaxConcurrentPositions}" EditValueType="{x:Type sys:Int32}" Increment="1" MinValue="0" IsFloatValue="False" /></ContentControl>
+                    <TextBlock Grid.Row="1" Grid.Column="2" Text="총 노출 한도 (계좌 %)" Style="{StaticResource Label}" />
+                    <ContentControl Grid.Row="1" Grid.Column="3" Margin="3"><dxe:SpinEdit EditValue="{Binding Settings.Risk.MaxTotalExposurePct}" EditValueType="{x:Type sys:Decimal}" Increment="5" MinValue="0" DisplayFormatString="0.##" /></ContentControl>
+                    <TextBlock Grid.Row="2" Grid.Column="0" Text="1회 주문 상한 (원)" Style="{StaticResource Label}" />
+                    <ContentControl Grid.Row="2" Grid.Column="1" Margin="3"><dxe:SpinEdit EditValue="{Binding Settings.Risk.MaxOrderAmount}" EditValueType="{x:Type sys:Decimal}" Increment="100000" MinValue="0" DisplayFormatString="N0" /></ContentControl>
+                    <TextBlock Grid.Row="2" Grid.Column="2" Text="봇당 주문 오류 허용" Style="{StaticResource Label}" />
+                    <ContentControl Grid.Row="2" Grid.Column="3" Margin="3"><dxe:SpinEdit EditValue="{Binding Settings.Risk.MaxOrderErrorsPerBot}" EditValueType="{x:Type sys:Int32}" Increment="1" MinValue="0" IsFloatValue="False" /></ContentControl>
+                    <TextBlock Grid.Row="3" Grid.Column="0" Text="연속 손실 → 쿨다운" Style="{StaticResource Label}" />
+                    <ContentControl Grid.Row="3" Grid.Column="1" Margin="3"><dxe:SpinEdit EditValue="{Binding Settings.Risk.MaxConsecutiveLosses}" EditValueType="{x:Type sys:Int32}" Increment="1" MinValue="0" IsFloatValue="False" /></ContentControl>
+                    <TextBlock Grid.Row="3" Grid.Column="2" Text="쿨다운 (분)" Style="{StaticResource Label}" />
+                    <ContentControl Grid.Row="3" Grid.Column="3" Margin="3"><dxe:SpinEdit EditValue="{Binding Settings.Risk.ConsecutiveLossCooldownMinutes}" EditValueType="{x:Type sys:Int32}" Increment="1" MinValue="0" IsFloatValue="False" /></ContentControl>
+                    <ContentControl Grid.Row="4" Grid.Column="0" Grid.ColumnSpan="2" Margin="3"><dxe:CheckEdit Content="일 손실 한도 도달 시 전량 청산" IsChecked="{Binding Settings.Risk.FlattenOnDailyLossLimit}" /></ContentControl>
+                    <ContentControl Grid.Row="4" Grid.Column="2" Grid.ColumnSpan="2" Margin="3"><dxe:CheckEdit Content="09:00~09:05 신규 진입 차단" IsChecked="{Binding Settings.Risk.BlockEntriesDuringOpeningMinutes}" /></ContentControl>
+                    <TextBlock Grid.Row="5" Grid.Column="0" Text="운용 기준 금액 (0=계좌 평가액)" Style="{StaticResource Label}" />
+                    <ContentControl Grid.Row="5" Grid.Column="1" Margin="3"><dxe:SpinEdit EditValue="{Binding Settings.CapitalOverride}" EditValueType="{x:Type sys:Decimal}" Increment="100000" MinValue="0" DisplayFormatString="N0" /></ContentControl>
                 </Grid>
-            </TabItem>
-
-            <!-- ================= 비용 · 기타 ================= -->
-            <TabItem Header="비용 · 기타">
-                <Grid Margin="10">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="220" /><ColumnDefinition Width="*" /><ColumnDefinition Width="220" /><ColumnDefinition Width="*" />
-                    </Grid.ColumnDefinitions>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition />
-                    </Grid.RowDefinitions>
-                    <TextBlock Grid.Row="0" Text="매매 수수료 % (편도)" />
-                    <TextBox Grid.Row="0" Grid.Column="1" Text="{Binding Settings.Cost.CommissionPct}" />
-                    <TextBlock Grid.Row="0" Grid.Column="2" Text="매도 세금 % (거래세+농특세)" />
-                    <TextBox Grid.Row="0" Grid.Column="3" Text="{Binding Settings.Cost.SellTaxPct}" />
-
-                    <TextBlock Grid.Row="1" Text="비용 추정 슬리피지 (틱)" />
-                    <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding Settings.Cost.SlippageTicks}" />
-                    <TextBlock Grid.Row="1" Grid.Column="2" Text="모의 시작 예수금 (원)" />
-                    <TextBox Grid.Row="1" Grid.Column="3" Text="{Binding Settings.PaperStartingCash, StringFormat={}{0:0}}" />
-
-                    <TextBlock Grid.Row="2" Text="시뮬레이션 배속" />
-                    <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding Settings.SimulationSpeed}" />
-                    <CheckBox Grid.Row="2" Grid.Column="2" Grid.ColumnSpan="2" Content="실시간 체결/호가 기록 (리플레이 백테스트용)" IsChecked="{Binding Settings.RecordTicks}" />
-
-                    <TextBlock Grid.Row="3" Text="주문 호출 한도 (초당)" />
-                    <TextBox Grid.Row="3" Grid.Column="1" Text="{Binding Settings.OrderRatePerSecond}" />
-                    <TextBlock Grid.Row="3" Grid.Column="2" Text="09:00~09:10 주문 한도 (초당)" />
-                    <TextBox Grid.Row="3" Grid.Column="3" Text="{Binding Settings.OpeningOrderRatePerSecond}" />
-
-                    <Button Grid.Row="4" Grid.Column="0" Content="봇 프리셋 기본값 복원" Command="{Binding ResetPresetsCommand}" HorizontalAlignment="Left" />
+                </StackPanel></ScrollViewer>
+            </dx:DXTabItem>
+            <dx:DXTabItem Header="스캐너">
+                <ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel Margin="8">
+                <TextBlock Text="스캐너 필터" Style="{StaticResource Section}" />
+                <Grid>
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="190" /><ColumnDefinition Width="*" /><ColumnDefinition Width="190" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                    <TextBlock Grid.Row="0" Grid.Column="0" Text="최소 등락률 %" Style="{StaticResource Label}" />
+                    <ContentControl Grid.Row="0" Grid.Column="1" Margin="3"><dxe:SpinEdit EditValue="{Binding Settings.Scanner.MinChangePct}" EditValueType="{x:Type sys:Decimal}" Increment="0.5" MinValue="0" DisplayFormatString="0.##" /></ContentControl>
+                    <TextBlock Grid.Row="0" Grid.Column="2" Text="최대 등락률 %" Style="{StaticResource Label}" />
+                    <ContentControl Grid.Row="0" Grid.Column="3" Margin="3"><dxe:SpinEdit EditValue="{Binding Settings.Scanner.MaxChangePct}" EditValueType="{x:Type sys:Decimal}" Increment="0.5" MinValue="0" DisplayFormatString="0.##" /></ContentControl>
+                    <TextBlock Grid.Row="1" Grid.Column="0" Text="최소 거래대금 (원, 10시 기준)" Style="{StaticResource Label}" />
+                    <ContentControl Grid.Row="1" Grid.Column="1" Margin="3"><dxe:SpinEdit EditValue="{Binding Settings.Scanner.MinTradingAmount}" EditValueType="{x:Type sys:Decimal}" Increment="100000000" MinValue="0" DisplayFormatString="N0" /></ContentControl>
+                    <TextBlock Grid.Row="1" Grid.Column="2" Text="최소 RVOL" Style="{StaticResource Label}" />
+                    <ContentControl Grid.Row="1" Grid.Column="3" Margin="3"><dxe:SpinEdit EditValue="{Binding Settings.Scanner.MinRvol}" EditValueType="{x:Type sys:Decimal}" Increment="0.5" MinValue="0" DisplayFormatString="0.##" /></ContentControl>
+                    <TextBlock Grid.Row="2" Grid.Column="0" Text="최소 가격 (원)" Style="{StaticResource Label}" />
+                    <ContentControl Grid.Row="2" Grid.Column="1" Margin="3"><dxe:SpinEdit EditValue="{Binding Settings.Scanner.MinPrice}" EditValueType="{x:Type sys:Decimal}" Increment="100000" MinValue="0" DisplayFormatString="N0" /></ContentControl>
+                    <TextBlock Grid.Row="2" Grid.Column="2" Text="최대 틱 비용률 %" Style="{StaticResource Label}" />
+                    <ContentControl Grid.Row="2" Grid.Column="3" Margin="3"><dxe:SpinEdit EditValue="{Binding Settings.Scanner.MaxTickCostPct}" EditValueType="{x:Type sys:Decimal}" Increment="0.01" MinValue="0" DisplayFormatString="0.###" /></ContentControl>
+                    <TextBlock Grid.Row="3" Grid.Column="0" Text="최대 스프레드 (틱)" Style="{StaticResource Label}" />
+                    <ContentControl Grid.Row="3" Grid.Column="1" Margin="3"><dxe:SpinEdit EditValue="{Binding Settings.Scanner.MaxSpreadTicks}" EditValueType="{x:Type sys:Int32}" Increment="1" MinValue="0" IsFloatValue="False" /></ContentControl>
+                    <TextBlock Grid.Row="3" Grid.Column="2" Text="폴링 주기 (초)" Style="{StaticResource Label}" />
+                    <ContentControl Grid.Row="3" Grid.Column="3" Margin="3"><dxe:SpinEdit EditValue="{Binding Settings.Scanner.PollSeconds}" EditValueType="{x:Type sys:Int32}" Increment="1" MinValue="0" IsFloatValue="False" /></ContentControl>
+                    <TextBlock Grid.Row="4" Grid.Column="0" Text="후보 최대 개수" Style="{StaticResource Label}" />
+                    <ContentControl Grid.Row="4" Grid.Column="1" Margin="3"><dxe:SpinEdit EditValue="{Binding Settings.Scanner.MaxCandidates}" EditValueType="{x:Type sys:Int32}" Increment="1" MinValue="0" IsFloatValue="False" /></ContentControl>
+                    <TextBlock Grid.Row="4" Grid.Column="2" Text="실시간 구독 상위 N" Style="{StaticResource Label}" />
+                    <ContentControl Grid.Row="4" Grid.Column="3" Margin="3"><dxe:SpinEdit EditValue="{Binding Settings.Scanner.LiveSubscribeTop}" EditValueType="{x:Type sys:Int32}" Increment="1" MinValue="0" IsFloatValue="False" /></ContentControl>
+                    <ContentControl Grid.Row="5" Grid.Column="0" Grid.ColumnSpan="2" Margin="3"><dxe:CheckEdit Content="보통주만 (ETF/ETN/우선주/워런트 제외)" IsChecked="{Binding Settings.Scanner.ExcludeNonCommonStock}" /></ContentControl>
                 </Grid>
-            </TabItem>
-        </TabControl>
+                </StackPanel></ScrollViewer>
+            </dx:DXTabItem>
+            <dx:DXTabItem Header="비용 · 기타">
+                <ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel Margin="8">
+                <TextBlock Text="비용 · 기타" Style="{StaticResource Section}" />
+                <Grid>
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="190" /><ColumnDefinition Width="*" /><ColumnDefinition Width="190" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                    <TextBlock Grid.Row="0" Grid.Column="0" Text="매매 수수료 % (편도)" Style="{StaticResource Label}" />
+                    <ContentControl Grid.Row="0" Grid.Column="1" Margin="3"><dxe:SpinEdit EditValue="{Binding Settings.Cost.CommissionPct}" EditValueType="{x:Type sys:Decimal}" Increment="0.001" MinValue="0" DisplayFormatString="0.####" /></ContentControl>
+                    <TextBlock Grid.Row="0" Grid.Column="2" Text="매도 세금 % (거래세+농특세)" Style="{StaticResource Label}" />
+                    <ContentControl Grid.Row="0" Grid.Column="3" Margin="3"><dxe:SpinEdit EditValue="{Binding Settings.Cost.SellTaxPct}" EditValueType="{x:Type sys:Decimal}" Increment="0.01" MinValue="0" DisplayFormatString="0.###" /></ContentControl>
+                    <TextBlock Grid.Row="1" Grid.Column="0" Text="비용 추정 슬리피지 (틱)" Style="{StaticResource Label}" />
+                    <ContentControl Grid.Row="1" Grid.Column="1" Margin="3"><dxe:SpinEdit EditValue="{Binding Settings.Cost.SlippageTicks}" EditValueType="{x:Type sys:Int32}" Increment="1" MinValue="0" IsFloatValue="False" /></ContentControl>
+                    <TextBlock Grid.Row="1" Grid.Column="2" Text="모의 시작 예수금 (원)" Style="{StaticResource Label}" />
+                    <ContentControl Grid.Row="1" Grid.Column="3" Margin="3"><dxe:SpinEdit EditValue="{Binding Settings.PaperStartingCash}" EditValueType="{x:Type sys:Decimal}" Increment="100000" MinValue="0" DisplayFormatString="N0" /></ContentControl>
+                    <TextBlock Grid.Row="2" Grid.Column="0" Text="시뮬레이션 배속" Style="{StaticResource Label}" />
+                    <ContentControl Grid.Row="2" Grid.Column="1" Margin="3"><dxe:SpinEdit EditValue="{Binding Settings.SimulationSpeed}" EditValueType="{x:Type sys:Double}" Increment="1" MinValue="1" MaxValue="120" /></ContentControl>
+                    <ContentControl Grid.Row="2" Grid.Column="2" Grid.ColumnSpan="2" Margin="3"><dxe:CheckEdit Content="실시간 체결/호가 기록 (리플레이 백테스트용)" IsChecked="{Binding Settings.RecordTicks}" /></ContentControl>
+                    <TextBlock Grid.Row="3" Grid.Column="0" Text="주문 호출 한도 (초당)" Style="{StaticResource Label}" />
+                    <ContentControl Grid.Row="3" Grid.Column="1" Margin="3"><dxe:SpinEdit EditValue="{Binding Settings.OrderRatePerSecond}" EditValueType="{x:Type sys:Int32}" Increment="1" MinValue="0" IsFloatValue="False" /></ContentControl>
+                    <TextBlock Grid.Row="3" Grid.Column="2" Text="09:00~09:10 주문 한도 (초당)" Style="{StaticResource Label}" />
+                    <ContentControl Grid.Row="3" Grid.Column="3" Margin="3"><dxe:SpinEdit EditValue="{Binding Settings.OpeningOrderRatePerSecond}" EditValueType="{x:Type sys:Int32}" Increment="1" MinValue="0" IsFloatValue="False" /></ContentControl>
+                </Grid>
+                <Button Content="봇 프리셋 기본값 복원" Command="{Binding ResetPresetsCommand}" HorizontalAlignment="Left" Margin="4,12" Padding="12,4" />
+                </StackPanel></ScrollViewer>
+            </dx:DXTabItem>
+        </dx:DXTabControl>
     </DockPanel>
-</Window>
+</dx:ThemedWindow>

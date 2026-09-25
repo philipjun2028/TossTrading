@@ -25,6 +25,12 @@ cd "C:\0. Project\TossTrading"
 
 - **.NET 10 SDK** (https://dotnet.microsoft.com/download/dotnet/10.0)
 - IDE: **Visual Studio 2026** 권장 (.NET 10 지원). Visual Studio 2022 를 쓰면 .NET 10 SDK 설치 후 아래 `dotnet` 명령으로 실행하세요.
+- **DevExpress WPF 24.1.7** (UI: ThemedWindow, GridControl, ChartControl, DevExpress.Mvvm, Win11Dark 테마)
+  - 설치 시 등록되는 NuGet 로컬 소스 **"DevExpress 24.1 Local"** 에서 패키지를 가져옵니다.
+    Visual Studio → 도구 → 옵션 → NuGet 패키지 관리자 → 패키지 소스에 없으면 추가:
+    `C:\Program Files\DevExpress 24.1\Components\System\Components\Packages`
+  - 사용하는 패키지: `DevExpress.Wpf.Core`, `DevExpress.Wpf.Grid`, `DevExpress.Wpf.Charts`, `DevExpress.Wpf.Themes.Win11Dark`
+  - 다른 24.1.x 버전이 설치되어 있으면: `dotnet build -p:DevExpressVersion=24.1.x` (또는 `TossTrading.App.csproj` 의 `DevExpressVersion` 수정)
 
 ### 3. 실행
 
@@ -60,7 +66,7 @@ src/
   TossTrading.Domain/   도메인: 호가단위, 비용모델, 사이징, 설정, 주문/시세 모델, 추상화(IBroker/IMarketDataFeed/IMarketDataSource)
   TossTrading.Engine/   엔진: 이벤트 루프, 봇 상태머신, 진입 전략, 주문 큐, 리스크, 스캐너, 페이퍼 브로커, 시뮬레이션 시장
   TossTrading.Toss/     토스 어댑터: OAuth 토큰, REST 클라이언트(호출 한도), 웹소켓(선언형 구독/재연결), 실전 브로커
-  TossTrading.App/      WPF (MVVM, CommunityToolkit.Mvvm), 캔들 차트, 설정(DPAPI 암호화)
+  TossTrading.App/      WPF + DevExpress 24.1 (DevExpress.Mvvm, GridControl, ChartControl 캔들), 설정(DPAPI 암호화)
   TossTrading.Cli/      연결 점검 / 헤드리스 시뮬레이션
 tests/TossTrading.Tests/ xUnit 56개 (도메인·봇·페이퍼·엔진 통합·토스 REST/WS 파싱)
 ```

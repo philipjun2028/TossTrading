@@ -25,7 +25,7 @@
 | 페이퍼 브로커 (호가 걸어 올라가기, 보수적 대기 체결) | ✅ | `Engine/Paper/PaperBroker.cs` |
 | 시뮬레이션 시장 (API 키 없이 체험/테스트) | ✅ | `Engine/Simulation/SimulatedMarket.cs` |
 | 거래 기록(JSONL), 로그, 틱/호가 기록(gzip) | ✅ | `Engine/Infrastructure/EngineLog.cs` |
-| WPF UI (대시보드·스캐너·봇·차트·거래·로그·설정) | ✅ | `App/` |
+| WPF UI (대시보드·스캐너·봇·차트·거래·로그·설정) — DevExpress 24.1.7 (ThemedWindow, GridControl, ChartControl, DevExpress.Mvvm) | ✅ | `App/` |
 | 리플레이 백테스터 / 리포트 화면 | ⏳ 다음 단계 | 틱 기록은 이미 쌓이도록 구현됨 |
 | 서버측 안전망(조건주문) | ⏳ 다음 단계 | 조건주문 동작 확인 후 |
 | 미국 주식 모드 | ⏳ 다음 단계 | 도메인은 `MarketCountry.US` 호가단위 준비됨 |
@@ -50,7 +50,8 @@
   - 토스: 결과 봉투/문자열 숫자 파싱, 계좌 헤더, 주문 본문(숫자=문자열), 에러 봉투 → 예외, 만료 토큰 1회 재발급, 403 IP 안내,
     웹소켓 선언 JSON 형식, 체결/호가/주문 프레임 파싱
 - `TossTrading.Cli sim` — 헤드리스로 스캐너→봇 추가→자동 진입→분할익절/트레일링/손절/봇 손실한도/최대 진입 소진까지 전 과정 동작 확인
-- WPF 앱 — 빌드(XAML 컴파일 포함) 성공, XAML 리소스 키/바인딩 경로 정적 점검. **실행 화면은 Windows 에서 확인 필요** (개발 환경이 Linux)
+- WPF 앱 — DevExpress 24.1.7 은 공개 NuGet 에 없어서, 개발 환경에서는 같은 API 의 **DevExpress 25.1.14 로 컴파일 검증**(XAML 포함, 오류 0)했습니다.
+  그리드 필드명·바인딩 경로도 정적 점검했습니다. **24.1.7 로컬 패키지로의 빌드와 실행 화면은 Windows 에서 확인 필요** (개발 환경이 Linux)
 
 ## 4. 실제 토스 계정으로 확인해야 하는 것 (★)
 

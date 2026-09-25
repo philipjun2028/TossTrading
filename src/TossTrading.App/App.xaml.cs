@@ -1,6 +1,7 @@
 using System.Threading;
 using System.Windows;
 using System.Windows.Threading;
+using DevExpress.Xpf.Core;
 using TossTrading.App.Views;
 
 namespace TossTrading.App;
@@ -20,6 +21,7 @@ public partial class App : Application
             return;
         }
 
+        ApplicationThemeHelper.ApplicationThemeName = Theme.Win11DarkName;
         DispatcherUnhandledException += OnUnhandled;
         base.OnStartup(e);
         new MainWindow().Show();
@@ -27,7 +29,7 @@ public partial class App : Application
 
     private static void OnUnhandled(object sender, DispatcherUnhandledExceptionEventArgs e)
     {
-        MessageBox.Show(e.Exception.Message, "예기치 않은 오류", MessageBoxButton.OK, MessageBoxImage.Error);
+        DXMessageBox.Show(e.Exception.Message, "예기치 않은 오류", MessageBoxButton.OK, MessageBoxImage.Error);
         e.Handled = true;
     }
 

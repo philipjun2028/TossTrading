@@ -1,8 +1,8 @@
 using System.Collections.ObjectModel;
 using System.Windows;
 using System.Windows.Threading;
-using CommunityToolkit.Mvvm.ComponentModel;
-using CommunityToolkit.Mvvm.Input;
+using DevExpress.Mvvm;
+using DevExpress.Xpf.Core;
 using TossTrading.App.Services;
 using TossTrading.App.Views;
 using TossTrading.Domain;
@@ -10,19 +10,39 @@ using TossTrading.Engine;
 
 namespace TossTrading.App.ViewModels;
 
-public sealed partial class MainViewModel : ObservableObject
+public sealed class MainViewModel : ViewModelBase
 {
     private readonly EngineHost _host = new();
     private readonly DispatcherTimer _timer;
     private long _lastLogSeq;
     private int _lastTradeCount;
+    private DateTime _lastChartUpdate;
 
     public MainViewModel()
     {
         Settings = SettingsStore.Load();
-        _dataSource = Settings.DataSource;
-        _execution = Settings.Execution;
+        DataSource = Settings.DataSource;
+        Execution = Settings.Execution;
+        Status = "중지됨 — [시작]을 눌러 주세요";
+        ChartTitle = "차트: 종목을 선택하세요";
         SelectedPreset = PresetNames.FirstOrDefault();
+
+        StartCommand = new AsyncCommand(StartAsync);
+        StopCommand = new AsyncCommand(StopAsync);
+        AddSelectedCandidateCommand = new AsyncCommand(AddSelectedCandidateAsync);
+        AddManualSymbolCommand = new AsyncCommand(AddManualSymbolAsync);
+        StartBotCommand = new AsyncCommand(() => BotCommand(id => Engine!.StartBotAsync(id)));
+        ManualBuyCommand = new AsyncCommand(() => BotCommand(id => Engine!.ManualBuyAsync(id)));
+        ApproveCommand = new AsyncCommand(() => BotCommand(id => Engine!.ApproveSignalAsync(id)));
+        RejectCommand = new AsyncCommand(() => BotCommand(id => Engine!.RejectSignalAsync(id)));
+        FlattenCommand = new AsyncCommand(() => BotCommand(id => Engine!.FlattenBotAsync(id)));
+        StopBotCommand = new AsyncCommand(() => BotCommand(id => Engine!.StopBotAsync(id, flatten: true)));
+        RemoveBotCommand = new AsyncCommand(() => BotCommand(id => Engine!.RemoveBotAsync(id)));
+        EditBotCommand = new AsyncCommand(EditBotAsync);
+        KillSwitchCommand = new AsyncCommand(KillSwitchAsync);
+        ResetKillSwitchCommand = new AsyncCommand(() => Engine is null ? Task.CompletedTask : Run(() => Engine.ResetKillSwitchAsync()));
+        OpenSettingsCommand = new AsyncCommand(OpenSettingsAsync);
+        SaveAsPresetCommand = new DelegateCommand(SaveAsPreset);
 
         _timer = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromMilliseconds(300) };
         _timer.Tick += (_, _) => Refresh();
@@ -50,53 +70,78 @@ public sealed partial class MainViewModel : ObservableObject
 
     public IReadOnlyList<string> PresetNames => Settings.Presets.Keys.ToList();
 
-    [ObservableProperty] [NotifyPropertyChangedFor(nameof(CanEditMode))] private bool _isRunning;
-    [ObservableProperty] private bool _isBusy;
-    [ObservableProperty] private DataSourceKind _dataSource;
-    [ObservableProperty] private ExecutionMode _execution;
-    [ObservableProperty] private string _status = "중지됨 — [시작]을 눌러 주세요";
-    [ObservableProperty] private string _modeBadge = "";
-    [ObservableProperty] private bool _isLive;
-    [ObservableProperty] private string _clock = "";
-    [ObservableProperty] private bool _feedConnected;
-
-    [ObservableProperty] private decimal _startEquity;
-    [ObservableProperty] private decimal _equity;
-    [ObservableProperty] private decimal _cash;
-    [ObservableProperty] private decimal _realizedNet;
-    [ObservableProperty] private decimal _unrealizedNet;
-    [ObservableProperty] private decimal _dailyPnlPct;
-    [ObservableProperty] private double _lossGauge;
-    [ObservableProperty] private string _lossGaugeText = "";
-    [ObservableProperty] private string _positionsText = "";
-    [ObservableProperty] private string? _blockReason;
-    [ObservableProperty] private bool _killSwitchActive;
-
-    [ObservableProperty] private CandidateRow? _selectedCandidate;
-    [ObservableProperty] [NotifyPropertyChangedFor(nameof(HasSelectedBot))] private BotRow? _selectedBot;
-    [ObservableProperty] private string? _selectedPreset;
-    [ObservableProperty] private string _manualSymbol = "";
-    [ObservableProperty] private ChartView? _chart;
-    [ObservableProperty] private string _chartTitle = "차트: 종목을 선택하세요";
-
+    // ---------------------------------------------------------------- 상태 속성
+    public bool IsRunning
+    {
+        get => GetValue<bool>();
+        private set => SetValue(value, () => RaisePropertyChanged(nameof(CanEditMode)));
+    }
     public bool CanEditMode => !IsRunning;
+    public bool IsBusy { get => GetValue<bool>(); private set => SetValue(value); }
+    public DataSourceKind DataSource { get => GetValue<DataSourceKind>(); set => SetValue(value); }
+    public ExecutionMode Execution { get => GetValue<ExecutionMode>(); set => SetValue(value); }
+    public string Status { get => GetValue<string>(); private set => SetValue(value); }
+    public string ModeBadge { get => GetValue<string>(); private set => SetValue(value); }
+    public bool IsLive { get => GetValue<bool>(); private set => SetValue(value); }
+    public string Clock { get => GetValue<string>(); private set => SetValue(value); }
+    public bool FeedConnected { get => GetValue<bool>(); private set => SetValue(value); }
+
+    public decimal StartEquity { get => GetValue<decimal>(); private set => SetValue(value); }
+    public decimal Equity { get => GetValue<decimal>(); private set => SetValue(value); }
+    public decimal Cash { get => GetValue<decimal>(); private set => SetValue(value); }
+    public decimal RealizedNet { get => GetValue<decimal>(); private set => SetValue(value); }
+    public decimal UnrealizedNet { get => GetValue<decimal>(); private set => SetValue(value); }
+    public decimal DailyPnlPct { get => GetValue<decimal>(); private set => SetValue(value); }
+    public double LossGauge { get => GetValue<double>(); private set => SetValue(value); }
+    public string LossGaugeText { get => GetValue<string>(); private set => SetValue(value); }
+    public string PositionsText { get => GetValue<string>(); private set => SetValue(value); }
+    public string? BlockReason { get => GetValue<string?>(); private set => SetValue(value); }
+    public bool KillSwitchActive { get => GetValue<bool>(); private set => SetValue(value); }
+
+    public CandidateRow? SelectedCandidate
+    {
+        get => GetValue<CandidateRow?>();
+        set => SetValue(value, () => { if (value is not null) _ = Engine?.SetFocusAsync(value.Symbol); });
+    }
+
+    public BotRow? SelectedBot
+    {
+        get => GetValue<BotRow?>();
+        set => SetValue(value, () =>
+        {
+            RaisePropertyChanged(nameof(HasSelectedBot));
+            if (value is not null) _ = Engine?.SetFocusAsync(value.Symbol);
+        });
+    }
+
     public bool HasSelectedBot => SelectedBot is not null;
+    public string? SelectedPreset { get => GetValue<string?>(); set => SetValue(value); }
+    public string ManualSymbol { get => GetValue<string>() ?? ""; set => SetValue(value); }
+    public ChartView? Chart { get => GetValue<ChartView?>(); private set => SetValue(value); }
+    public string ChartTitle { get => GetValue<string>(); private set => SetValue(value); }
+
+    // ---------------------------------------------------------------- 명령
+    public AsyncCommand StartCommand { get; }
+    public AsyncCommand StopCommand { get; }
+    public AsyncCommand AddSelectedCandidateCommand { get; }
+    public AsyncCommand AddManualSymbolCommand { get; }
+    public AsyncCommand StartBotCommand { get; }
+    public AsyncCommand ManualBuyCommand { get; }
+    public AsyncCommand ApproveCommand { get; }
+    public AsyncCommand RejectCommand { get; }
+    public AsyncCommand FlattenCommand { get; }
+    public AsyncCommand StopBotCommand { get; }
+    public AsyncCommand RemoveBotCommand { get; }
+    public AsyncCommand EditBotCommand { get; }
+    public AsyncCommand KillSwitchCommand { get; }
+    public AsyncCommand ResetKillSwitchCommand { get; }
+    public AsyncCommand OpenSettingsCommand { get; }
+    public DelegateCommand SaveAsPresetCommand { get; }
 
     private TradingEngine? Engine => _host.Engine;
 
-    partial void OnSelectedCandidateChanged(CandidateRow? value)
-    {
-        if (value is not null) _ = Engine?.SetFocusAsync(value.Symbol);
-    }
-
-    partial void OnSelectedBotChanged(BotRow? value)
-    {
-        if (value is not null) _ = Engine?.SetFocusAsync(value.Symbol);
-    }
-
     // ================================================================ 엔진 시작/중지
 
-    [RelayCommand]
     private async Task StartAsync()
     {
         if (IsRunning || IsBusy) return;
@@ -104,10 +149,10 @@ public sealed partial class MainViewModel : ObservableObject
         {
             if (DataSource != DataSourceKind.Toss)
             {
-                MessageBox.Show("실전 주문은 '토스 실시간' 데이터에서만 가능합니다.", "실전 모드", MessageBoxButton.OK, MessageBoxImage.Warning);
+                DXMessageBox.Show("실전 주문은 '토스 실시간' 데이터에서만 가능합니다.", "실전 모드", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
-            var ok = MessageBox.Show(
+            var ok = DXMessageBox.Show(
                 "실전(Live) 모드는 실제 계좌로 주문이 나갑니다.\n\n" +
                 "• 페이퍼 트레이딩으로 충분히 검증했나요? (설계 문서 10장)\n" +
                 "• 리스크 한도(일 손실 한도, 최대 투입금)를 확인했나요?\n" +
@@ -135,7 +180,7 @@ public sealed partial class MainViewModel : ObservableObject
         catch (Exception ex)
         {
             Status = "시작 실패";
-            MessageBox.Show(ex.Message, "엔진 시작 실패", MessageBoxButton.OK, MessageBoxImage.Error);
+            DXMessageBox.Show(ex.Message, "엔진 시작 실패", MessageBoxButton.OK, MessageBoxImage.Error);
         }
         finally
         {
@@ -143,14 +188,13 @@ public sealed partial class MainViewModel : ObservableObject
         }
     }
 
-    [RelayCommand]
     private async Task StopAsync()
     {
         if (!IsRunning) return;
         var s = Engine?.Snapshot;
         if (s is not null && s.Bots.Any(b => b.Quantity > 0))
         {
-            var r = MessageBox.Show("보유 중인 봇이 있습니다. 엔진을 멈추면 청산 관리가 중단됩니다.\n그래도 중지할까요? (먼저 킬스위치/청산 권장)",
+            var r = DXMessageBox.Show("보유 중인 봇이 있습니다. 엔진을 멈추면 청산 관리가 중단됩니다.\n그래도 중지할까요? (먼저 킬스위치/청산 권장)",
                 "중지 확인", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
             if (r != MessageBoxResult.Yes) return;
         }
@@ -172,14 +216,12 @@ public sealed partial class MainViewModel : ObservableObject
 
     // ================================================================ 봇 명령
 
-    [RelayCommand]
     private async Task AddSelectedCandidateAsync()
     {
-        if (SelectedCandidate is null) { MessageBox.Show("스캐너에서 종목을 선택하세요."); return; }
-        await AddBotAsync(SelectedCandidate.Symbol, SelectedCandidate.Name, SelectedCandidate.Price);
+        if (SelectedCandidate is not { } c) { DXMessageBox.Show("스캐너에서 종목을 선택하세요."); return; }
+        await AddBotAsync(c.Symbol, c.Name, c.Price);
     }
 
-    [RelayCommand]
     private async Task AddManualSymbolAsync()
     {
         var sym = ManualSymbol.Trim().ToUpperInvariant();
@@ -190,49 +232,37 @@ public sealed partial class MainViewModel : ObservableObject
 
     private async Task AddBotAsync(string symbol, string? name, decimal referencePrice)
     {
-        if (Engine is null) { MessageBox.Show("먼저 엔진을 시작하세요."); return; }
+        if (Engine is null) { DXMessageBox.Show("먼저 엔진을 시작하세요."); return; }
         var preset = SelectedPreset is not null && Settings.Presets.TryGetValue(SelectedPreset, out var p) ? p.Clone() : new BotSettings();
-        var dlg = new BotSettingsWindow(new BotSettingsViewModel(preset, $"{name ?? symbol} ({symbol}) 봇 설정", Settings, referencePrice: referencePrice)) { Owner = Application.Current.MainWindow };
+        var vm = new BotSettingsViewModel(preset, $"{name ?? symbol} ({symbol}) 봇 설정", Settings, referencePrice: referencePrice);
+        var dlg = new BotSettingsWindow(vm) { Owner = Application.Current.MainWindow };
         if (dlg.ShowDialog() != true) return;
         await Run(async () =>
         {
-            var id = await Engine.AddBotAsync(symbol, name, dlg.ViewModel.Result);
-            if (dlg.ViewModel.StartImmediately) await Engine.StartBotAsync(id);
+            var id = await Engine.AddBotAsync(symbol, name, vm.Result);
+            if (vm.StartImmediately) await Engine.StartBotAsync(id);
         });
     }
 
-    [RelayCommand] private Task StartBotAsync() => BotCommand(id => Engine!.StartBotAsync(id));
-    [RelayCommand] private Task ManualBuyAsync() => BotCommand(id => Engine!.ManualBuyAsync(id));
-    [RelayCommand] private Task ApproveAsync() => BotCommand(id => Engine!.ApproveSignalAsync(id));
-    [RelayCommand] private Task RejectAsync() => BotCommand(id => Engine!.RejectSignalAsync(id));
-    [RelayCommand] private Task FlattenAsync() => BotCommand(id => Engine!.FlattenBotAsync(id));
-    [RelayCommand] private Task StopBotAsync() => BotCommand(id => Engine!.StopBotAsync(id, flatten: true));
-    [RelayCommand] private Task RemoveBotAsync() => BotCommand(id => Engine!.RemoveBotAsync(id));
-
-    [RelayCommand]
     private async Task EditBotAsync()
     {
         if (SelectedBot is null || Engine is null) return;
-        var dlg = new BotSettingsWindow(new BotSettingsViewModel(SelectedBot.Settings.Clone(), $"{SelectedBot.Name} 봇 설정 변경", Settings, isEdit: true))
-        { Owner = Application.Current.MainWindow };
+        var vm = new BotSettingsViewModel(SelectedBot.Settings.Clone(), $"{SelectedBot.Name} 봇 설정 변경", Settings, isEdit: true,
+            referencePrice: SelectedBot.LastPrice > 0 ? SelectedBot.LastPrice : 10_000m);
+        var dlg = new BotSettingsWindow(vm) { Owner = Application.Current.MainWindow };
         if (dlg.ShowDialog() != true) return;
         var id = SelectedBot.Id;
-        await Run(() => Engine.UpdateBotSettingsAsync(id, dlg.ViewModel.Result));
+        await Run(() => Engine.UpdateBotSettingsAsync(id, vm.Result));
     }
 
-    [RelayCommand]
     private async Task KillSwitchAsync()
     {
         if (Engine is null) return;
-        var r = MessageBox.Show("킬스위치: 모든 봇을 정지하고, 미체결을 취소하고, 보유분을 시장가로 청산합니다.\n실행할까요?",
+        var r = DXMessageBox.Show("킬스위치: 모든 봇을 정지하고, 미체결을 취소하고, 보유분을 시장가로 청산합니다.\n실행할까요?",
             "킬스위치", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
         if (r == MessageBoxResult.Yes) await Run(() => Engine.KillSwitchAsync());
     }
 
-    [RelayCommand]
-    private Task ResetKillSwitchAsync() => Engine is null ? Task.CompletedTask : Run(() => Engine.ResetKillSwitchAsync());
-
-    [RelayCommand]
     private async Task OpenSettingsAsync()
     {
         var vm = new SettingsViewModel(SettingsStore.Clone(Settings), IsRunning);
@@ -240,7 +270,7 @@ public sealed partial class MainViewModel : ObservableObject
         if (dlg.ShowDialog() != true) return;
         Settings = vm.Settings;
         SettingsStore.Save(Settings);
-        OnPropertyChanged(nameof(PresetNames));
+        RaisePropertyChanged(nameof(PresetNames));
         if (Engine is not null)
         {
             await Run(() => Engine.UpdateRiskAsync(Settings.Risk.Clone()));
@@ -248,14 +278,13 @@ public sealed partial class MainViewModel : ObservableObject
         }
     }
 
-    [RelayCommand]
     private void SaveAsPreset()
     {
         if (SelectedBot is null) return;
         var name = $"{SelectedBot.Strategy} {DateTime.Now:MMdd-HHmm}";
         Settings.Presets[name] = SelectedBot.Settings.Clone();
         SettingsStore.Save(Settings);
-        OnPropertyChanged(nameof(PresetNames));
+        RaisePropertyChanged(nameof(PresetNames));
         SelectedPreset = name;
     }
 
@@ -265,7 +294,7 @@ public sealed partial class MainViewModel : ObservableObject
     private static async Task Run(Func<Task> action)
     {
         try { await action(); }
-        catch (Exception ex) { MessageBox.Show(ex.Message, "알림", MessageBoxButton.OK, MessageBoxImage.Information); }
+        catch (Exception ex) { DXMessageBox.Show(ex.Message, "알림", MessageBoxButton.OK, MessageBoxImage.Information); }
     }
 
     // ================================================================ 화면 갱신
@@ -320,8 +349,13 @@ public sealed partial class MainViewModel : ObservableObject
         }
         while (Logs.Count > 500) Logs.RemoveAt(Logs.Count - 1);
 
-        Chart = s.Chart;
-        ChartTitle = s.Chart is { } ch ? $"차트: {ch.Name} ({ch.Symbol}) 1분봉 · VWAP" : "차트: 종목을 선택하세요";
+        // 차트는 1초에 한 번만 다시 그린다 (DevExpress 차트 재바인딩 비용 절감)
+        if (DateTime.UtcNow - _lastChartUpdate >= TimeSpan.FromSeconds(1) || (Chart?.Symbol != s.Chart?.Symbol))
+        {
+            _lastChartUpdate = DateTime.UtcNow;
+            Chart = s.Chart;
+            ChartTitle = s.Chart is { } ch ? $"차트: {ch.Name} ({ch.Symbol}) 1분봉 · VWAP" : "차트: 종목을 선택하세요";
+        }
     }
 
     /// <summary>키 기준 제자리 갱신 (선택/스크롤 유지)</summary>
