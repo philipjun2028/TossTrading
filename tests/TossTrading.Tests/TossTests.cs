@@ -49,7 +49,7 @@ public class TossRestClientTests
             _ => new HttpResponseMessage(HttpStatusCode.NotFound),
         };
 
-        var r = await client.GetRankingsAsync("MARKET_TRADING_AMOUNT", "KR", "realtime", 5, true, default);
+        var r = await client.GetRankingsAsync("MARKET_TRADING_AMOUNT", "KR", "realtime", 5, true, TestContext.Current.CancellationToken);
         Assert.Single(r.Rankings);
         Assert.Equal(2570m, r.Rankings[0].Price.LastPrice);
         Assert.Equal(0.2986m, r.Rankings[0].Price.ChangeRate);
@@ -78,7 +78,7 @@ public class TossRestClientTests
         var res = await client.PlaceOrderAsync(new PlaceOrderBody
         {
             Symbol = "005930", Side = "BUY", OrderType = "LIMIT", Quantity = "10", Price = "70000", TimeInForce = "DAY", ClientOrderId = "abc",
-        }, default);
+        }, TestContext.Current.CancellationToken);
 
         Assert.Equal("ORD1", res.OrderId);
         var (req, body) = handler.Requests[1];
@@ -99,7 +99,7 @@ public class TossRestClientTests
             ? FakeHandler.Json(Token)
             : FakeHandler.Json("""{"error":{"requestId":"r1","code":"insufficient-buying-power","message":"매수 가능 금액 부족"}}""", HttpStatusCode.BadRequest);
 
-        var ex = await Assert.ThrowsAsync<TossApiException>(() => client.PlaceOrderAsync(new PlaceOrderBody { Symbol = "005930", Side = "BUY", OrderType = "MARKET", Quantity = "1" }, default));
+        var ex = await Assert.ThrowsAsync<TossApiException>(() => client.PlaceOrderAsync(new PlaceOrderBody { Symbol = "005930", Side = "BUY", OrderType = "MARKET", Quantity = "1" }, TestContext.Current.CancellationToken));
         Assert.Equal("insufficient-buying-power", ex.Code);
         Assert.Equal("r1", ex.RequestId);
         Assert.False(ex.IsTransient);
@@ -120,7 +120,7 @@ public class TossRestClientTests
                 : FakeHandler.Json("""{"result":[{"symbol":"005930","timestamp":null,"lastPrice":"248000","currency":"KRW"}]}""");
         };
 
-        var prices = await client.GetPricesAsync(new[] { "005930" }, default);
+        var prices = await client.GetPricesAsync(new[] { "005930" }, TestContext.Current.CancellationToken);
         Assert.Equal(248_000m, prices[0].LastPrice);
         Assert.Equal(2, tokenCalls);
         Assert.Equal("Bearer tok-2", handler.Requests.Last().Request.Headers.Authorization!.ToString());
@@ -131,7 +131,7 @@ public class TossRestClientTests
     {
         var (client, handler) = Create();
         handler.Respond = _ => FakeHandler.Json("""{"error":"access_denied","error_description":"IP address not allowed"}""", HttpStatusCode.Forbidden);
-        var ex = await Assert.ThrowsAsync<TossApiException>(() => client.GetPricesAsync(new[] { "005930" }, default));
+        var ex = await Assert.ThrowsAsync<TossApiException>(() => client.GetPricesAsync(new[] { "005930" }, TestContext.Current.CancellationToken));
         Assert.Equal("access_denied", ex.Code);
         Assert.Contains("허용 IP", ex.Message);
     }
@@ -150,7 +150,7 @@ public class TossRestClientTests
                 """),
             _ => new HttpResponseMessage(HttpStatusCode.NotFound),
         };
-        var dto = await client.GetOrderAsync("O1", default);
+        var dto = await client.GetOrderAsync("O1", TestContext.Current.CancellationToken);
         var u = TossMapper.ToUpdate(dto);
         Assert.Equal(OrderStatus.PartialFilled, u.Status);
         Assert.Equal(4m, u.FilledQuantity);
@@ -171,8 +171,8 @@ public class TossStreamTests
     {
         var stream = Create(out _);
         Assert.Equal("[]", stream.BuildDeclaration("1"));
-        await stream.SetMarketSubscriptionsAsync(new[] { "005930", "000660", "AAPL" }, new[] { "005930" }, default);
-        await stream.SetOrderSubscriptionAsync(3, default);
+        await stream.SetMarketSubscriptionsAsync(new[] { "005930", "000660", "AAPL" }, new[] { "005930" }, TestContext.Current.CancellationToken);
+        await stream.SetOrderSubscriptionAsync(3, TestContext.Current.CancellationToken);
         var json = stream.BuildDeclaration("9");
         Assert.Equal(
             """[{"id":"9"},{"type":"trade:kr","codes":["000660","005930"]},{"type":"trade:us","codes":["AAPL"]},{"type":"orderbook:kr","codes":["005930"]},{"type":"personal:order","codes":["3"]}]""",

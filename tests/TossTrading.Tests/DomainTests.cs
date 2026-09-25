@@ -175,11 +175,11 @@ public class RateGateTests
     {
         long now = 0;
         var gate = new RateGate(() => 3, () => now);
-        for (var i = 0; i < 3; i++) await gate.WaitAsync(CancellationToken.None);
-        var fourth = gate.WaitAsync(CancellationToken.None);
-        await Task.Delay(50);
+        for (var i = 0; i < 3; i++) await gate.WaitAsync(TestContext.Current.CancellationToken);
+        var fourth = gate.WaitAsync(TestContext.Current.CancellationToken);
+        await Task.Delay(50, TestContext.Current.CancellationToken);
         Assert.False(fourth.IsCompleted);
         now = 1_001;
-        await fourth.WaitAsync(TimeSpan.FromSeconds(3));
+        await fourth.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
     }
 }

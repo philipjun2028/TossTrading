@@ -36,7 +36,7 @@ cd "C:\0. Project\TossTrading"
 
 ```powershell
 dotnet run --project src\TossTrading.App          # WPF 앱
-dotnet test                                        # 테스트 (56개)
+dotnet test --project tests\TossTrading.Tests       # 테스트 (56개, xunit.v3)
 ```
 
 또는 Visual Studio 에서 `TossTrading.sln` 을 열고 `TossTrading.App` 을 시작 프로젝트로 지정해 F5.

@@ -90,7 +90,7 @@ public class PaperBrokerTests
     [Fact]
     public async Task AggressiveLimitWalksTheBook()
     {
-        var ack = await _broker.PlaceOrderAsync(Req(OrderSide.Buy, OrderType.Limit, 120, 10_010m), default);
+        var ack = await _broker.PlaceOrderAsync(Req(OrderSide.Buy, OrderType.Limit, 120, 10_010m), TestContext.Current.CancellationToken);
         var last = _updates.Last(u => u.OrderId == ack.OrderId);
         Assert.Equal(OrderStatus.Filled, last.Status);
         Assert.Equal(120m, last.FilledQuantity);
@@ -100,7 +100,7 @@ public class PaperBrokerTests
     [Fact]
     public async Task RestingLimitFillsOnlyWhenTradedThrough()
     {
-        var ack = await _broker.PlaceOrderAsync(Req(OrderSide.Buy, OrderType.Limit, 10, 9_980m), default);
+        var ack = await _broker.PlaceOrderAsync(Req(OrderSide.Buy, OrderType.Limit, 10, 9_980m), TestContext.Current.CancellationToken);
         Assert.Equal(OrderStatus.Pending, _updates.Last().Status);
         _broker.OnTrade(new TradeTick("A", 9_980m, 5, _clock.Now));   // 같은 가격 → 미체결 (보수적)
         Assert.Equal(OrderStatus.Pending, _updates.Last(u => u.OrderId == ack.OrderId).Status);
@@ -111,21 +111,21 @@ public class PaperBrokerTests
     [Fact]
     public async Task RejectsOversellAndInsufficientCash()
     {
-        await Assert.ThrowsAsync<BrokerException>(() => _broker.PlaceOrderAsync(Req(OrderSide.Sell, OrderType.Market, 1, null), default));
-        await Assert.ThrowsAsync<BrokerException>(() => _broker.PlaceOrderAsync(Req(OrderSide.Buy, OrderType.Limit, 2_000, 10_000m), default));
-        await Assert.ThrowsAsync<BrokerException>(() => _broker.PlaceOrderAsync(Req(OrderSide.Buy, OrderType.Limit, 1, 10_003m), default));
+        await Assert.ThrowsAsync<BrokerException>(() => _broker.PlaceOrderAsync(Req(OrderSide.Sell, OrderType.Market, 1, null), TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<BrokerException>(() => _broker.PlaceOrderAsync(Req(OrderSide.Buy, OrderType.Limit, 2_000, 10_000m), TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<BrokerException>(() => _broker.PlaceOrderAsync(Req(OrderSide.Buy, OrderType.Limit, 1, 10_003m), TestContext.Current.CancellationToken));
     }
 
     [Fact]
     public async Task ModifyToMarketFillsAndIssuesNewOrderId()
     {
-        await _broker.PlaceOrderAsync(Req(OrderSide.Buy, OrderType.Limit, 10, 10_000m), default);
-        var sell = await _broker.PlaceOrderAsync(Req(OrderSide.Sell, OrderType.Limit, 10, 10_100m), default);
-        var modified = await _broker.ModifyOrderAsync(sell.OrderId, OrderType.Market, 10, null, default);
+        await _broker.PlaceOrderAsync(Req(OrderSide.Buy, OrderType.Limit, 10, 10_000m), TestContext.Current.CancellationToken);
+        var sell = await _broker.PlaceOrderAsync(Req(OrderSide.Sell, OrderType.Limit, 10, 10_100m), TestContext.Current.CancellationToken);
+        var modified = await _broker.ModifyOrderAsync(sell.OrderId, OrderType.Market, 10, null, TestContext.Current.CancellationToken);
         Assert.NotEqual(sell.OrderId, modified.OrderId);
         Assert.Equal(OrderStatus.Replaced, _updates.Last(u => u.OrderId == sell.OrderId).Status);
         Assert.Equal(OrderStatus.Filled, _updates.Last(u => u.OrderId == modified.OrderId).Status);
-        var snap = await _broker.GetAccountSnapshotAsync(default);
+        var snap = await _broker.GetAccountSnapshotAsync(TestContext.Current.CancellationToken);
         Assert.Empty(snap.Holdings);
         Assert.True(snap.Cash < 10_000_000m); // 비용 + 스프레드 손실
     }
@@ -345,13 +345,13 @@ public class EngineIntegrationTests
         var options = new EngineOptions { RunScanner = false };
         var paper = new PaperBroker(10_000_000m, new CostModel(options.Cost), sim);
         await using var engine = new TradingEngine(options, sim, sim, paper, sim);
-        await engine.StartAsync();
+        await engine.StartAsync(TestContext.Current.CancellationToken);
 
         var symbol = sim.Symbols[0];
         sim.AdvanceTo(sim.Now.AddMinutes(10));
         var id = await engine.AddBotAsync(symbol, null, new BotSettings { Sizing = SizingMode.FixedAmount, FixedAmount = 1_000_000m });
         await engine.StartBotAsync(id);
-        for (var i = 0; i < 5; i++) { sim.AdvanceTo(sim.Now.AddSeconds(5)); await engine.TickAsync(); await Task.Delay(50); }
+        for (var i = 0; i < 5; i++) { sim.AdvanceTo(sim.Now.AddSeconds(5)); await engine.TickAsync(); await Task.Delay(50, TestContext.Current.CancellationToken); }
 
         await engine.ManualBuyAsync(id);
         var bought = await WaitUntil(engine, s => s.Bots[0].Quantity > 0);
@@ -371,7 +371,7 @@ public class EngineIntegrationTests
         sim.AdvanceTo(sim.Now.AddMinutes(40));
         var scanner = new TossTrading.Engine.Scanning.ScannerService(sim, sim, new ScannerSettings(), _ => null, _ => { }, (_, _) => { });
         IReadOnlyList<ScanCandidate> result = Array.Empty<ScanCandidate>();
-        for (var i = 0; i < 8; i++) result = await scanner.ScanOnceAsync(default); // 경고/일봉 캐시 채우기
+        for (var i = 0; i < 8; i++) result = await scanner.ScanOnceAsync(TestContext.Current.CancellationToken); // 경고/일봉 캐시 채우기
         Assert.NotEmpty(result);
         Assert.All(result, c => Assert.InRange(c.ChangePct, 3m, 20m));
         Assert.DoesNotContain(result, c => c.Name.Length == 0);
@@ -384,7 +384,7 @@ public class EngineIntegrationTests
         {
             await engine.TickAsync();
             if (engine.Snapshot.Bots.Count > 0 && cond(engine.Snapshot)) return true;
-            await Task.Delay(30);
+            await Task.Delay(30, TestContext.Current.CancellationToken);
         }
         return false;
     }
