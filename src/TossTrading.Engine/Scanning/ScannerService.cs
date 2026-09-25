@@ -149,6 +149,11 @@ public sealed class ScannerService : IAsyncDisposable
             if (change >= 15m) tags.Add("과열근접");
             if (vwapDist is { } vd && vd is >= 0 and <= 1m) tags.Add("VWAP근접");
             if (live?.RangePosition is >= 0.95m) tags.Add("신고가근접");
+            // 종가매매 후보: 14:30~15:20, 강세(+3~20%), 고가 부근(범위 상단 75% 이상), VWAP 위
+            var tNow = Kst.TimeOf(now);
+            if (tNow >= new TimeOnly(14, 30) && tNow < new TimeOnly(15, 20) && change is >= 3m and <= 20m
+                && live?.RangePosition is >= 0.75m && vwapDist is >= 0m)
+                tags.Add("종가후보");
 
             var score = Score(rvol, e.TradingAmount, live?.Strength, vwapDist, live?.RangePosition, tickCost, s);
             var name = _stocks.TryGetValue(e.Symbol, out var st) ? st.Name : e.Symbol;

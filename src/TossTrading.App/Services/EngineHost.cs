@@ -11,6 +11,9 @@ public sealed class EngineHost : IAsyncDisposable
 {
     private TossConnection? _toss;
 
+    /// <summary>봇·모의계좌 저장 폴더 (토스 데이터일 때만 사용)</summary>
+    public static string StateDirectory => System.IO.Path.Combine(SettingsStore.DataDirectory, "state");
+
     public TradingEngine? Engine { get; private set; }
     public SimulatedMarket? Simulation { get; private set; }
 
@@ -41,6 +44,8 @@ public sealed class EngineHost : IAsyncDisposable
             CapitalOverride = s.CapitalOverride,
             OrderRatePerSecond = s.OrderRatePerSecond,
             OpeningOrderRatePerSecond = s.OpeningOrderRatePerSecond,
+            // 익일 보유(종가매매) 포지션을 재시작 후에도 이어서 관리. 시뮬레이션은 종목이 매번 바뀌므로 저장 안 함
+            StateDirectory = s.DataSource == DataSourceKind.Toss ? StateDirectory : null,
         };
 
         IMarketDataFeed feed;
@@ -50,7 +55,7 @@ public sealed class EngineHost : IAsyncDisposable
 
         if (s.DataSource == DataSourceKind.Simulation)
         {
-            Simulation = new SimulatedMarket(new SimulationOptions { Speed = s.SimulationSpeed });
+            Simulation = new SimulatedMarket(new SimulationOptions { Speed = s.SimulationSpeed, StartTime = s.SimulationStartTime });
             feed = Simulation;
             source = Simulation;
             clock = Simulation;

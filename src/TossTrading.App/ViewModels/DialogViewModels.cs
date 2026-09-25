@@ -58,8 +58,15 @@ public sealed class BotSettingsViewModel : ViewModelBase
             "ORB" => "ORB (시가범위 돌파)",
             "VWAP눌림" => "VWAP 눌림 재돌파",
             "고가돌파" => "박스 상단(당일 고가) 돌파",
+            "종가베팅" => "종가베팅 (장 마감 전 매수 → 익일 매도)",
             var x => x,
         })).ToList();
+
+    public IReadOnlyList<EnumOption<NextDayExitMode>> NextDayExitOptions { get; } = new[]
+    {
+        new EnumOption<NextDayExitMode>(NextDayExitMode.Managed, "관리 (손절·익절·트레일링 후 청산 시각에 매도)"),
+        new EnumOption<NextDayExitMode>(NextDayExitMode.AtOpen, "시초 매도 (장 시작 직후 전량 시장가)"),
+    };
 
     public IReadOnlyList<EnumOption<SizingMode>> SizingOptions { get; } = new[]
     {
@@ -108,6 +115,7 @@ public sealed class SettingsViewModel : ViewModelBase
         ConnectionResult = "";
         TestConnectionCommand = new AsyncCommand(TestConnectionAsync);
         ResetPresetsCommand = new DelegateCommand(ResetPresets);
+        ResetPaperAccountCommand = new DelegateCommand(ResetPaperAccount, () => !EngineRunning);
         SaveCommand = new DelegateCommand(Save);
         CancelCommand = new DelegateCommand(() => RequestClose?.Invoke(false));
     }
@@ -128,6 +136,7 @@ public sealed class SettingsViewModel : ViewModelBase
 
     public AsyncCommand TestConnectionCommand { get; }
     public DelegateCommand ResetPresetsCommand { get; }
+    public DelegateCommand ResetPaperAccountCommand { get; }
     public DelegateCommand SaveCommand { get; }
     public DelegateCommand CancelCommand { get; }
 
@@ -156,6 +165,19 @@ public sealed class SettingsViewModel : ViewModelBase
     {
         if (DXMessageBox.Show("프리셋을 기본값으로 되돌릴까요?", "프리셋", MessageBoxButton.YesNo) == MessageBoxResult.Yes)
             Settings.Presets = BotPresets.CreateDefaults();
+    }
+
+    /// <summary>토스 실시간 + 모의 주문의 저장된 모의계좌·봇을 지운다 (엔진 정지 상태에서만)</summary>
+    private void ResetPaperAccount()
+    {
+        if (DXMessageBox.Show("모의계좌(예수금·보유)와 저장된 모의 봇을 모두 지우고 새로 시작할까요?", "모의계좌 초기화",
+                MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No) != MessageBoxResult.Yes) return;
+        foreach (var f in new[] { "paper_account.json", "bots_paper.json" })
+        {
+            var path = System.IO.Path.Combine(EngineHost.StateDirectory, f);
+            try { if (System.IO.File.Exists(path)) System.IO.File.Delete(path); } catch { /* 무시 */ }
+        }
+        ConnectionResult = "모의계좌를 초기화했습니다. 다음 시작 때 '모의 시작 예수금'으로 새로 시작합니다.";
     }
 
     private void Save()

@@ -52,6 +52,17 @@ public enum EntryStrategyKind
     OpeningRangeBreakout,
     VwapReclaim,
     HighBreakout,
+    /// <summary>종가매매: 장 마감 전 강세 종목 매수 → 익일 매도</summary>
+    ClosingBet,
+}
+
+/// <summary>익일 보유 포지션의 청산 방식</summary>
+public enum NextDayExitMode
+{
+    /// <summary>익일 장 시작 직후 전량 매도</summary>
+    AtOpen,
+    /// <summary>손절/익절/트레일링으로 관리하고, 청산 시각에 잔량 매도</summary>
+    Managed,
 }
 
 public enum SizingMode { RiskBased, FixedAmount }

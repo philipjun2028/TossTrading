@@ -22,6 +22,7 @@ public static class EntrySignalFactory
         EntryStrategyKind.OpeningRangeBreakout => new OpeningRangeBreakoutSignal(),
         EntryStrategyKind.VwapReclaim => new VwapReclaimSignal(),
         EntryStrategyKind.HighBreakout => new HighBreakoutSignal(),
+        EntryStrategyKind.ClosingBet => new ClosingBetSignal(),
         _ => null,
     };
 
@@ -31,6 +32,7 @@ public static class EntrySignalFactory
         EntryStrategyKind.OpeningRangeBreakout => "ORB",
         EntryStrategyKind.VwapReclaim => "VWAP눌림",
         EntryStrategyKind.HighBreakout => "고가돌파",
+        EntryStrategyKind.ClosingBet => "종가베팅",
         _ => kind.ToString(),
     };
 }
@@ -150,5 +152,46 @@ public sealed class HighBreakoutSignal : IEntrySignal
         _firedLevel = boxHigh;
         return new EntrySignal(price, TickRules.AddTicks(boxLow, -1, ctx.Market),
             $"{BoxBars}분 박스 상단 {boxHigh:N0} 돌파", now);
+    }
+}
+
+/// <summary>
+/// 종가매매(종가 베팅). 진입 허용 시간(기본 15:00~15:19) 안에서 하루 한 번, 아래를 모두 만족하면 신호.
+/// ① 당일 등락률이 하한~상한 사이 (강세지만 상한가 추격은 아님)
+/// ② 당일 고저 범위의 상단에서 거래 (기본 75% 이상 = 고가 부근 마감)
+/// ③ VWAP 위 (당일 매수자 평균 단가보다 위 = 수급 우위)
+/// ④ 체결강도 100 이상 (데이터가 있을 때)
+/// ⑤ 최근 30분 동안 밀리지 않음 (장 후반 매도세 회피)
+/// ⑥ 상한가 3% 이내 제외 (익일 변동성·체결 불확실)
+/// 손절은 % 기준 (구조적 손절 없음) — 익일 갭 하락은 손절가보다 더 밀려 체결될 수 있다.
+/// </summary>
+public sealed class ClosingBetSignal : IEntrySignal
+{
+    private DateOnly _firedDate;
+
+    public string Name => "종가베팅";
+
+    public EntrySignal? Evaluate(SymbolContext ctx, DateTimeOffset now, BotSettings s, SignalTrigger trigger)
+    {
+        var today = Kst.DateOf(now);
+        if (_firedDate == today) return null;
+        var t = Kst.TimeOf(now);
+        if (t < s.EntryStartTime || t >= s.EntryEndTime || t >= BotSettings.MarketCloseAuction) return null;
+
+        var price = ctx.LastPrice;
+        if (price <= 0 || ctx.ChangeRate is not { } change) return null;
+        var changePct = change * 100m;
+        if (changePct < s.ClosingMinChangePct || changePct > s.ClosingMaxChangePct) return null;
+        if (ctx.RangePosition is not { } pos || pos < s.ClosingMinRangePosition) return null;
+        if (price < ctx.Vwap) return null;
+        if (ctx.Strength is { } strength && strength < 100m) return null;
+        if (ctx.Limits?.Upper is { } upper && price >= upper * 0.97m) return null;
+
+        var thirtyMinAgo = ctx.Bars.LastOrDefault(b => b.Start <= now.AddMinutes(-30));
+        if (thirtyMinAgo is not null && price < thirtyMinAgo.Close) return null;
+
+        _firedDate = today;
+        return new EntrySignal(price, null,
+            $"종가베팅: 등락 {changePct:+0.0}%, 고저범위 {pos:P0} 위치, VWAP {ctx.Vwap:N0} 위", now);
     }
 }

@@ -122,7 +122,16 @@
                     <TextBlock Grid.Row="3" Grid.Column="2" Text="09:00~09:10 주문 한도 (초당)" Style="{StaticResource Label}" />
                     <ContentControl Grid.Row="3" Grid.Column="3" Margin="3"><dxe:SpinEdit EditValue="{Binding Settings.OpeningOrderRatePerSecond}" EditValueType="{x:Type sys:Int32}" Increment="1" MinValue="0" IsFloatValue="False" /></ContentControl>
                 </Grid>
-                <Button Content="봇 프리셋 기본값 복원" Command="{Binding ResetPresetsCommand}" HorizontalAlignment="Left" Margin="4,12" Padding="12,4" />
+                <Grid Margin="0,6,0,0">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="190" /><ColumnDefinition Width="*" /><ColumnDefinition Width="190" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Text="시뮬레이션 시작 시각 (HH:mm)" Style="{StaticResource Label}" />
+                    <ContentControl Grid.Column="1" Margin="3"><dxe:TextEdit EditValue="{Binding Settings.SimulationStartTime, Converter={StaticResource TimeOnlyConv}}" MaskType="RegEx" Mask="(0[9]|1[0-5]):[0-5][0-9]" ToolTip="종가매매 연습은 14:30 처럼 오후로 설정" /></ContentControl>
+                </Grid>
+                <StackPanel Orientation="Horizontal" Margin="4,12">
+                    <Button Content="봇 프리셋 기본값 복원" Command="{Binding ResetPresetsCommand}" Padding="12,4" Margin="0,0,8,0" />
+                    <Button Content="모의계좌 초기화 (토스 데이터용)" Command="{Binding ResetPaperAccountCommand}" Padding="12,4"
+                            ToolTip="엔진을 멈춘 상태에서만 가능. 저장된 모의 예수금·보유·봇을 지웁니다." />
+                </StackPanel>
                 </StackPanel></ScrollViewer>
             </dx:DXTabItem>
         </dx:DXTabControl>

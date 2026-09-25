@@ -94,6 +94,24 @@
                     <TextBlock Grid.Row="1" Grid.Column="2" Text="재진입 쿨다운 (초)" Style="{StaticResource Label}" />
                     <ContentControl Grid.Row="1" Grid.Column="3" Margin="3"><dxe:SpinEdit EditValue="{Binding S.CooldownSeconds}" EditValueType="{x:Type sys:Int32}" Increment="1" MinValue="0" IsFloatValue="False" /></ContentControl>
                 </Grid>
+                <TextBlock Text="⑤ 종가매매 · 익일 보유" Style="{StaticResource Section}" />
+                <Grid>
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="190" /><ColumnDefinition Width="*" /><ColumnDefinition Width="190" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                    <ContentControl Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2" Margin="3"><dxe:CheckEdit Content="장 마감 후에도 보유 (익일 매도)" IsChecked="{Binding S.HoldOvernight}" /></ContentControl>
+                    <TextBlock Grid.Row="0" Grid.Column="2" Text="익일 청산 방식" Style="{StaticResource Label}" />
+                    <ContentControl Grid.Row="0" Grid.Column="3" Margin="3"><dxe:ComboBoxEdit IsTextEditable="False" ItemsSource="{Binding NextDayExitOptions}" DisplayMember="Label" ValueMember="Value" EditValue="{Binding S.NextDayExitMode}" /></ContentControl>
+                    <TextBlock Grid.Row="1" Grid.Column="0" Text="익일 청산 시각 (HH:mm)" Style="{StaticResource Label}" />
+                    <ContentControl Grid.Row="1" Grid.Column="1" Margin="3"><dxe:TextEdit EditValue="{Binding S.NextDayExitTime, Converter={StaticResource TimeOnlyConv}}" MaskType="RegEx" Mask="([01][0-9]|2[0-3]):[0-5][0-9]" /></ContentControl>
+                    <TextBlock Grid.Row="1" Grid.Column="2" Text="종가 후보: 고저범위 위치 하한" Style="{StaticResource Label}" />
+                    <ContentControl Grid.Row="1" Grid.Column="3" Margin="3"><dxe:SpinEdit EditValue="{Binding S.ClosingMinRangePosition}" EditValueType="{x:Type sys:Decimal}" Increment="0.05" MinValue="0" MaxValue="1" DisplayFormatString="0.00" /></ContentControl>
+                    <TextBlock Grid.Row="2" Grid.Column="0" Text="종가 후보: 등락률 하한 %" Style="{StaticResource Label}" />
+                    <ContentControl Grid.Row="2" Grid.Column="1" Margin="3"><dxe:SpinEdit EditValue="{Binding S.ClosingMinChangePct}" EditValueType="{x:Type sys:Decimal}" Increment="0.5" MinValue="0" DisplayFormatString="0.##" /></ContentControl>
+                    <TextBlock Grid.Row="2" Grid.Column="2" Text="종가 후보: 등락률 상한 %" Style="{StaticResource Label}" />
+                    <ContentControl Grid.Row="2" Grid.Column="3" Margin="3"><dxe:SpinEdit EditValue="{Binding S.ClosingMaxChangePct}" EditValueType="{x:Type sys:Decimal}" Increment="0.5" MinValue="0" DisplayFormatString="0.##" /></ContentControl>
+                    <TextBlock Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="4" Margin="4,6" TextWrapping="Wrap" Foreground="{StaticResource SubText}" FontSize="11"
+                               Text="익일 보유 봇은 당일 강제청산·타임스탑을 쓰지 않고, 정규장(09:00~15:20)에서만 손절/익절을 적용합니다 (동시호가·NXT 시간외 체결로 손절되지 않도록). 진입 종료 시각은 15:20 이전이어야 합니다. 밤사이 갭 하락은 손절가보다 더 낮게 체결될 수 있으니 손절 %와 투입금을 보수적으로 잡으세요." />
+                </Grid>
                 <TextBlock Margin="4,14,4,0" TextWrapping="Wrap" Foreground="{StaticResource SubText}" FontSize="11"
                            Text="※ 청산 %는 매수 평균가 대비 가격 변동 기준입니다. 계좌 전체 한도(일 손실 한도, 동시 보유 수, 총 노출)는 [설정 → 리스크]에서 관리하며 봇 설정보다 우선합니다." />
             </StackPanel>

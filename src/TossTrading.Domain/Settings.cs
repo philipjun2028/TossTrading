@@ -78,6 +78,27 @@ public sealed class BotSettings
     public int MaxEntries { get; set; } = 3;
     public int CooldownSeconds { get; set; } = 300;
 
+    // ---- 종가매매 / 익일 보유 ----
+    /// <summary>장 마감 후에도 보유 (종가매매). 켜면 강제청산 시각·타임스탑 대신 익일 청산 규칙을 쓴다.</summary>
+    public bool HoldOvernight { get; set; }
+
+    public NextDayExitMode NextDayExitMode { get; set; } = NextDayExitMode.Managed;
+
+    /// <summary>익일 이 시각까지 남은 수량을 매도 (Managed 모드)</summary>
+    public TimeOnly NextDayExitTime { get; set; } = new(10, 0);
+
+    /// <summary>종가매매 후보 조건: 당일 등락률 하한 %</summary>
+    public decimal ClosingMinChangePct { get; set; } = 3m;
+
+    /// <summary>종가매매 후보 조건: 당일 등락률 상한 % (상한가 근처 추격 방지)</summary>
+    public decimal ClosingMaxChangePct { get; set; } = 20m;
+
+    /// <summary>종가매매 후보 조건: 당일 고저 범위 내 위치 하한 (0~1, 1 = 고가 마감)</summary>
+    public decimal ClosingMinRangePosition { get; set; } = 0.75m;
+
+    /// <summary>KRX 종가 단일가 매매 시작 (15:20). 이후에는 접속매매 체결이 없다.</summary>
+    public static readonly TimeOnly MarketCloseAuction = new(15, 20);
+
     public BotSettings Clone() => (BotSettings)MemberwiseClone();
 
     /// <summary>설정 유효성 검사. 문제 없으면 빈 목록.</summary>
@@ -95,6 +116,13 @@ public sealed class BotSettings
             e.Add("수동진입 모드에서는 전략을 '수동'으로 두세요 (자동 신호는 반자동/완전자동에서 사용).");
         if (Mode != BotMode.ManualEntry && Strategy == EntryStrategyKind.Manual)
             e.Add("반자동/완전자동 모드에는 진입 전략을 선택해야 합니다.");
+        if (Strategy == EntryStrategyKind.ClosingBet && !HoldOvernight)
+            e.Add("종가매매 전략은 '익일 보유'를 켜야 합니다.");
+        if (HoldOvernight && EntryEndTime > MarketCloseAuction)
+            e.Add("익일 보유 봇은 진입 종료 시각이 15:20 (종가 단일가 시작) 이전이어야 합니다.");
+        if (HoldOvernight && (NextDayExitTime <= Kst.MarketOpen || NextDayExitTime > MarketCloseAuction))
+            e.Add("익일 청산 시각은 09:00 이후 15:20 이전이어야 합니다.");
+        if (ClosingMinChangePct > ClosingMaxChangePct) e.Add("종가매매 등락률 하한이 상한보다 큽니다.");
         return e;
     }
 }
@@ -165,6 +193,15 @@ public static class BotPresets
         {
             Mode = BotMode.SemiAuto, Strategy = EntryStrategyKind.HighBreakout,
             StopLossPct = 2.0m, TakeProfitPct = 6m, TrailingDistancePct = 1.8m, EntryEndTime = new TimeOnly(14, 0),
+        },
+        ["종가베팅 (익일 매도)"] = new BotSettings
+        {
+            Mode = BotMode.SemiAuto, Strategy = EntryStrategyKind.ClosingBet,
+            EntryStartTime = new TimeOnly(15, 0), EntryEndTime = new TimeOnly(15, 19),
+            HoldOvernight = true, NextDayExitMode = NextDayExitMode.Managed, NextDayExitTime = new TimeOnly(10, 0),
+            RiskPerTradePct = 0.2m, StopLossPct = 3m, UseStructuralStop = false,
+            PartialTakeProfitPct = 2m, TakeProfitPct = 5m, TrailingActivationPct = 2.5m, TrailingDistancePct = 1.5m,
+            TimeStopMinutes = 0, MaxEntries = 1, BotTargetProfitPct = 0, BotMaxLossPct = 0,
         },
         ["보수형"] = new BotSettings
         {

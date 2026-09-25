@@ -29,6 +29,17 @@ public sealed class RiskManager
 
     public void ActivateKillSwitch() => KillSwitchActive = true;
 
+    /// <summary>새 거래일: 일일 실현손익·한도 도달 여부·연속손실 초기화 (킬스위치는 유지)</summary>
+    public void ResetDaily(decimal equity)
+    {
+        RealizedToday = 0;
+        DailyLossLimitHit = false;
+        DailyTargetHit = false;
+        _consecutiveLosses = 0;
+        _lossCooldownUntil = DateTimeOffset.MinValue;
+        SetStartEquity(equity);
+    }
+
     public void ResetKillSwitch() => KillSwitchActive = false;
 
     public decimal DailyPnl(decimal unrealized) => RealizedToday + unrealized;

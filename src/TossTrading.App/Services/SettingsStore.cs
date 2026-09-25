@@ -28,6 +28,9 @@ public sealed class AppSettings
     public decimal PaperStartingCash { get; set; } = 10_000_000m;
     public decimal CapitalOverride { get; set; }
     public double SimulationSpeed { get; set; } = 10;
+
+    /// <summary>시뮬레이션 시작 가상 시각 (종가매매 연습은 14:30 등으로)</summary>
+    public TimeOnly SimulationStartTime { get; set; } = new(9, 0);
     public bool RecordTicks { get; set; } = true;
     public int OrderRatePerSecond { get; set; } = 5;
     public int OpeningOrderRatePerSecond { get; set; } = 2;

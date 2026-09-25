@@ -55,6 +55,37 @@ public sealed class PaperBroker : IBroker
 
     public Task StartAsync(CancellationToken ct) => Task.CompletedTask;
 
+    /// <summary>모의 계좌 저장 상태 (현금 + 보유). 미체결 주문은 저장하지 않는다.</summary>
+    public sealed record PaperAccountState(decimal Cash, List<PaperPositionState> Positions);
+
+    public sealed record PaperPositionState(string Symbol, string Name, decimal Quantity, decimal AveragePrice, decimal LastPrice);
+
+    public PaperAccountState CaptureState()
+    {
+        lock (_lock)
+        {
+            return new PaperAccountState(_cash, _positions.Where(p => p.Value.Quantity > 0)
+                .Select(p => new PaperPositionState(p.Key, _names.GetValueOrDefault(p.Key, p.Key), p.Value.Quantity, p.Value.AveragePrice,
+                    _lastPrices.GetValueOrDefault(p.Key, p.Value.AveragePrice)))
+                .ToList());
+        }
+    }
+
+    public void RestoreState(PaperAccountState state)
+    {
+        lock (_lock)
+        {
+            _cash = state.Cash;
+            _positions.Clear();
+            foreach (var p in state.Positions)
+            {
+                _positions[p.Symbol] = new Position { Quantity = p.Quantity, AveragePrice = p.AveragePrice };
+                _names[p.Symbol] = p.Name;
+                _lastPrices[p.Symbol] = p.LastPrice;
+            }
+        }
+    }
+
     public void SetName(string symbol, string name)
     {
         lock (_lock) _names[symbol] = name;

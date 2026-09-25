@@ -25,6 +25,15 @@ public interface IBotHost
     void Log(LogLevel level, string source, string message);
 }
 
+/// <summary>봇 저장 상태 (JSON)</summary>
+public sealed record BotPersistState(
+    string Id, string Symbol, string Name, BotSettings Settings, BotState State, string StateReason,
+    decimal Quantity, decimal AveragePrice, decimal InitialStop, decimal? StopPrice, decimal PeakPrice,
+    DateTimeOffset EntryTime, bool PartialTaken, string StopKind,
+    decimal RealizedNet, int Entries, int Wins, int Losses,
+    decimal TradeBuyQty, decimal TradeBuyValue, decimal TradeSellQty, decimal TradeSellValue, decimal TradeNet, string EntryReason,
+    DateOnly SavedDate);
+
 /// <summary>
 /// 종목 1개를 담당하는 봇. 상태 머신 (설계 문서 8.5) + 청산 규칙 (6.2).
 /// 엔진 이벤트 루프에서만 호출된다 (단일 스레드).
@@ -110,6 +119,59 @@ public sealed class TradingBot
             if (Quantity <= 0 || Context.LastPrice <= 0) return 0;
             return _host.Cost.NetPnl(AveragePrice, Context.LastPrice, Quantity);
         }
+    }
+
+    // ================================================================ 저장 / 복원 (익일 보유 대비)
+
+    /// <summary>재시작 후 이어서 관리하기 위한 봇 상태 (미체결 주문은 저장하지 않는다)</summary>
+    public BotPersistState Capture() => new(
+        Id, Symbol, Context.Name, Settings.Clone(), State, StateReason,
+        Quantity, AveragePrice, InitialStop, StopPrice, PeakPrice, EntryTime, PartialTaken, _stopKind,
+        RealizedNet, Entries, Wins, Losses,
+        _tradeBuyQty, _tradeBuyValue, _tradeSellQty, _tradeSellValue, _tradeNet, _entryReason,
+        Kst.DateOf(_host.Now));
+
+    /// <summary>
+    /// 저장된 상태로 봇을 되살린다. 날짜가 바뀌었으면 당일 통계(실현손익·진입 횟수·승패)는 새로 시작하고,
+    /// 보유 포지션과 진행 중인 거래 기록은 유지한다. 보유분이 있으면 즉시 청산 관리(InPosition)로 시작한다.
+    /// </summary>
+    public static TradingBot Restore(BotPersistState st, SymbolContext context, IBotHost host)
+    {
+        var bot = new TradingBot(st.Id, context, st.Settings, host)
+        {
+            Quantity = st.Quantity,
+            AveragePrice = st.AveragePrice,
+            InitialStop = st.InitialStop,
+            StopPrice = st.StopPrice,
+            PeakPrice = st.PeakPrice,
+            EntryTime = st.EntryTime,
+            PartialTaken = st.PartialTaken,
+        };
+        bot._stopKind = st.StopKind;
+        bot._tradeBuyQty = st.TradeBuyQty;
+        bot._tradeBuyValue = st.TradeBuyValue;
+        bot._tradeSellQty = st.TradeSellQty;
+        bot._tradeSellValue = st.TradeSellValue;
+        bot._tradeNet = st.TradeNet;
+        bot._entryReason = st.EntryReason;
+
+        var sameDay = st.SavedDate == Kst.DateOf(host.Now);
+        if (sameDay)
+        {
+            bot.RealizedNet = st.RealizedNet;
+            bot.Entries = st.Entries;
+            bot.Wins = st.Wins;
+            bot.Losses = st.Losses;
+        }
+        else
+        {
+            bot.Entries = bot.HasPosition ? 1 : 0;
+        }
+
+        if (bot.HasPosition) bot.SetState(BotState.InPosition, sameDay ? "재시작 복원" : "익일 보유 복원");
+        else if (sameDay && st.State.IsFinished()) bot.SetState(st.State, st.StateReason);
+        else bot.SetState(BotState.Idle, "재시작 복원 — [시작]을 누르세요");
+        return bot;
     }
 
     // ================================================================ 명령
@@ -385,15 +447,29 @@ public sealed class TradingBot
     private bool EntryWindowOpen(DateTimeOffset now)
     {
         var t = Kst.TimeOf(now);
-        return t >= Settings.EntryStartTime && t < Settings.EntryEndTime && t < Settings.ForceExitTime;
+        return t >= Settings.EntryStartTime && t < Settings.EntryEndTime && t < LastEntryTime;
     }
+
+    /// <summary>신규 진입 마지노선: 당일 청산 봇은 강제청산 시각, 익일 보유 봇은 종가 단일가 시작(15:20)</summary>
+    private TimeOnly LastEntryTime => Settings.HoldOvernight ? BotSettings.MarketCloseAuction : Settings.ForceExitTime;
+
+    /// <summary>KRX 정규장 접속매매 시간 (09:00~15:20). 익일 보유 포지션은 이 시간에만 청산 규칙을 적용한다
+    /// (동시호가·NXT 시간외의 얇은 호가에서 손절이 걸리는 것을 막기 위해).</summary>
+    private static bool InContinuousSession(DateTimeOffset now)
+    {
+        var t = Kst.TimeOf(now);
+        return t >= Kst.MarketOpen && t < BotSettings.MarketCloseAuction;
+    }
+
+    /// <summary>진입한 날보다 뒤의 날짜인가 (익일 보유 중)</summary>
+    public bool IsCarriedOver => HasPosition && Kst.DateOf(_host.Now) > Kst.DateOf(EntryTime);
 
     private bool TryEnter(EntrySignal? sig, string reason)
     {
         if (HasWorkingOrders) { _host.Log(LogLevel.Warn, Id, "미체결 주문이 있어 진입 보류"); return false; }
         if (Entries >= Settings.MaxEntries) { _host.Log(LogLevel.Warn, Id, "최대 진입 횟수 도달"); return false; }
         if (Context.LastPrice <= 0) { _host.Log(LogLevel.Warn, Id, "시세 없음 — 진입 불가"); return false; }
-        if (Kst.TimeOf(_host.Now) >= Settings.ForceExitTime) { _host.Log(LogLevel.Warn, Id, "강제 청산 시각 이후 — 진입 불가"); return false; }
+        if (Kst.TimeOf(_host.Now) >= LastEntryTime) { _host.Log(LogLevel.Warn, Id, $"{LastEntryTime:HH\\:mm} 이후 — 진입 불가"); return false; }
 
         var ask = Context.OrderBook?.BestAsk ?? Context.LastPrice;
         var limit = TickRules.AddTicks(ask, Settings.EntrySlippageTicks, Context.Market);
@@ -429,6 +505,44 @@ public sealed class TradingBot
         if (!HasPosition) return;
         var p = Context.LastPrice;
         if (p <= 0) return;
+
+        if (Settings.HoldOvernight)
+        {
+            if (!InContinuousSession(now))
+            {
+                if (_exitOrder is null && State == BotState.InPosition)
+                    StateReason = Settings.NextDayExitMode == NextDayExitMode.AtOpen
+                        ? "익일 보유 — 시초 매도 예정"
+                        : $"익일 보유 — {Settings.NextDayExitTime:HH\\:mm}까지 관리";
+                return;
+            }
+            // 장 시작 전 데이터(전일 종가)가 아니라 오늘 체결가로 판단해야 한다
+            if (IsCarriedOver && Kst.DateOf(Context.LastTradeTime) < Kst.DateOf(now)) return;
+            // 진입 당일: 익일 갭을 노리는 전략이므로 손절만 적용 (익절·트레일링·본절은 익일부터)
+            if (!IsCarriedOver)
+            {
+                var entryDayStop = StopPrice ?? InitialStop;
+                if (_exitOrder is null && p <= entryDayStop)
+                    SubmitExit(Quantity, $"손절 ({entryDayStop:N0})", OrderPriority.Emergency, market: false);
+                else if (_exitOrder is null && State == BotState.InPosition)
+                    StateReason = "종가 보유 중 — 당일은 손절만 적용";
+                return;
+            }
+            if (_exitOrder is null)
+            {
+                if (Settings.NextDayExitMode == NextDayExitMode.AtOpen)
+                {
+                    SubmitExit(Quantity, "익일 시초 매도", OrderPriority.Exit, market: true);
+                    return;
+                }
+                if (Kst.TimeOf(now) >= Settings.NextDayExitTime)
+                {
+                    SubmitExit(Quantity, $"익일 청산 시각 {Settings.NextDayExitTime:HH\\:mm}", OrderPriority.Exit, market: false);
+                    return;
+                }
+            }
+        }
+
         if (p > PeakPrice) PeakPrice = p;
 
         var stop = StopPrice ?? InitialStop;
@@ -469,6 +583,8 @@ public sealed class TradingBot
                 return;
             }
         }
+        if (Settings.HoldOvernight) return; // 익일 보유 봇은 타임스탑·당일 강제청산 없음
+
         if (Settings.TimeStopMinutes > 0 && (now - EntryTime).TotalMinutes >= Settings.TimeStopMinutes
             && PeakPrice < AveragePrice + R * Settings.TimeStopMinProgressR)
         {

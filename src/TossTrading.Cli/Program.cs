@@ -11,7 +11,8 @@ var cmd = args.FirstOrDefault()?.ToLowerInvariant();
 return cmd switch
 {
     "check" => await CheckAsync(),
-    "sim" => await SimAsync(args.Length > 1 ? int.Parse(args[1]) : 60, args.Length > 2 ? double.Parse(args[2]) : 60),
+    "sim" => await SimAsync(args.Length > 1 ? int.Parse(args[1]) : 60, args.Length > 2 ? double.Parse(args[2]) : 60,
+                            closing: args.Length > 3 && args[3].Equals("closing", StringComparison.OrdinalIgnoreCase)),
     _ => Usage(),
 };
 
@@ -22,7 +23,9 @@ static int Usage()
 
           check              토스 Open API 연결 점검 (Phase 0)
                              환경변수: TOSS_CLIENT_ID, TOSS_CLIENT_SECRET, (선택) TOSS_ACCOUNT_SEQ
-          sim [초] [배속]    시뮬레이션 시장 + 모의 체결로 엔진을 헤드리스 실행 (기본 60초, 60배속)
+          sim [초] [배속] [closing]
+                             시뮬레이션 시장 + 모의 체결로 엔진을 헤드리스 실행 (기본 60초, 60배속)
+                             closing: 14:40 부터 시작해 종가베팅 봇으로 실행
         """);
     return 1;
 }
@@ -94,9 +97,9 @@ static async Task<int> CheckAsync()
 // ---------------------------------------------------------------------------------------------
 // 헤드리스 시뮬레이션: 스캐너 상위 종목에 봇을 붙이고 자동매매
 // ---------------------------------------------------------------------------------------------
-static async Task<int> SimAsync(int seconds, double speed)
+static async Task<int> SimAsync(int seconds, double speed, bool closing)
 {
-    var sim = new SimulatedMarket(new SimulationOptions { Speed = speed, Seed = 42 });
+    var sim = new SimulatedMarket(new SimulationOptions { Speed = speed, Seed = 42, StartTime = closing ? new TimeOnly(14, 40) : new TimeOnly(9, 0) });
     var options = new EngineOptions { Execution = ExecutionMode.Paper, DataSource = DataSourceKind.Simulation };
     options.Scanner.PollSeconds = 2;
     var paper = new PaperBroker(10_000_000m, new CostModel(options.Cost), sim);
@@ -114,7 +117,8 @@ static async Task<int> SimAsync(int seconds, double speed)
         foreach (var c in s.Candidates.Take(4))
         {
             if (added.Count >= 4 || !added.Add(c.Symbol)) continue;
-            var preset = (added.Count % 2 == 0 ? presets["VWAP 눌림 표준"] : presets["ORB 표준"]).Clone();
+            var preset = (closing ? presets["종가베팅 (익일 매도)"]
+                : added.Count % 2 == 0 ? presets["VWAP 눌림 표준"] : presets["ORB 표준"]).Clone();
             preset.Mode = BotMode.FullAuto;
             try
             {

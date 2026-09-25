@@ -34,6 +34,12 @@ public sealed class EngineOptions
     public decimal CapitalOverride { get; set; }
 
     public bool RunScanner { get; set; } = true;
+
+    /// <summary>
+    /// 봇·모의계좌 상태 저장 폴더 (null = 저장 안 함). 익일 보유(종가매매) 포지션을 재시작 후에도 이어서 관리하려면 필요.
+    /// 시뮬레이션 시장은 종목이 매번 새로 만들어지므로 저장하지 않는다.
+    /// </summary>
+    public string? StateDirectory { get; set; }
 }
 
 /// <summary>
@@ -85,6 +91,9 @@ public sealed class TradingEngine : IBotHost, IAsyncDisposable
     private bool _feedConnected;
     private bool _wasDisconnected;
     private int _botSeq;
+    private readonly StateStore? _store;
+    private DateOnly _tradingDate;
+    private DateTimeOffset _lastSave;
     private DateTimeOffset _lastSecond, _lastAccountRefresh;
     private (HashSet<string> Trades, HashSet<string> Books) _subs = (new(), new());
 
@@ -108,6 +117,9 @@ public sealed class TradingEngine : IBotHost, IAsyncDisposable
         _log = new EngineLog(dir is null ? null : Path.Combine(dir, "logs"), () => _clock.Now);
         _journal = new TradeJournal(dir is null ? null : Path.Combine(dir, "journal"));
         if (options.RecordTicks && dir is not null) _recorder = new TickRecorder(Path.Combine(dir, "ticks"));
+
+        if (options.StateDirectory is not null)
+            _store = new StateStore(options.StateDirectory, options.Execution == ExecutionMode.Live ? "live" : "paper");
 
         _orders = new OrderManager(broker, OrderRateLimit, r => Post(() => HandleJobResult(r)), (l, m) => _log.Write(l, "주문", m));
         _scanner = new ScannerService(source, clock, options.Scanner,
@@ -136,12 +148,20 @@ public sealed class TradingEngine : IBotHost, IAsyncDisposable
         _log.Write(LogLevel.Info, "엔진", $"시작: 데이터={_options.DataSource}, 주문={_options.Execution} ({_broker.Name})");
 
         await _broker.StartAsync(_cts.Token).ConfigureAwait(false);
+        if (_store is not null && _paper is not null && _store.LoadPaper() is { } paperState)
+        {
+            _paper.RestoreState(paperState);
+            _log.Write(LogLevel.Info, "엔진", $"모의계좌 복원: 예수금 {paperState.Cash:N0}원, 보유 {paperState.Positions.Count}종목");
+        }
+        var saved = _store?.LoadBots() ?? Array.Empty<BotPersistState>();
         var snap = await _broker.GetAccountSnapshotAsync(_cts.Token).ConfigureAwait(false);
         Post(() =>
         {
             _account = snap;
+            _tradingDate = Kst.DateOf(_clock.Now);
             _risk.SetStartEquity(_options.CapitalOverride > 0 ? _options.CapitalOverride : snap.Equity);
             _log.Write(LogLevel.Info, "엔진", $"운용 기준 금액 {_risk.StartEquity:N0}원 (예수금 {snap.Cash:N0})");
+            RestoreBots(saved, snap);
         });
 
         _orders.Start();
@@ -153,6 +173,11 @@ public sealed class TradingEngine : IBotHost, IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
+        if (_loop is not null && _store is not null)
+        {
+            try { await Invoke(() => { SaveState(); return true; }).WaitAsync(TimeSpan.FromSeconds(3)).ConfigureAwait(false); }
+            catch { /* 저장 실패해도 종료는 진행 */ }
+        }
         _cts?.Cancel();
         await _scanner.DisposeAsync().ConfigureAwait(false);
         await _orders.DisposeAsync().ConfigureAwait(false);
@@ -439,6 +464,21 @@ public sealed class TradingEngine : IBotHost, IAsyncDisposable
     {
         var now = _clock.Now;
 
+        // 날짜가 바뀌면(엔진을 밤새 켜둔 경우) 계좌 레벨 일일 한도를 새로 시작
+        var today = Kst.DateOf(now);
+        if (_tradingDate != default && today != _tradingDate)
+        {
+            _tradingDate = today;
+            _risk.ResetDaily(_options.CapitalOverride > 0 ? _options.CapitalOverride : _account.Equity);
+            _log.Write(LogLevel.Info, "엔진", $"새 거래일 {today:yyyy-MM-dd}: 일일 손익·한도 초기화");
+        }
+
+        if (_store is not null && (now - _lastSave).TotalSeconds >= 2)
+        {
+            _lastSave = now;
+            SaveState();
+        }
+
         foreach (var ctx in _contexts.Values)
         {
             if (!ctx.OnTimer(now)) continue;
@@ -485,6 +525,38 @@ public sealed class TradingEngine : IBotHost, IAsyncDisposable
         {
             _log.Write(LogLevel.Warn, "계좌", $"계좌 조회 실패: {ex.Message}");
         }
+    }
+
+    // ================================================================ 저장 / 복원
+
+    private void SaveState() => _store?.Save(_bots.Select(b => b.Capture()).ToList(), _paper?.CaptureState());
+
+    /// <summary>
+    /// 저장된 봇 복원. 같은 날이면 전부, 날짜가 바뀌었으면 보유 포지션이 남은 봇(익일 보유)만 되살린다.
+    /// 실전 모드는 실제 계좌 잔고와 대조해 수량을 맞춘다.
+    /// </summary>
+    private void RestoreBots(IReadOnlyList<BotPersistState> saved, AccountSnapshot snap)
+    {
+        var today = Kst.DateOf(_clock.Now);
+        foreach (var st in saved)
+        {
+            if (st.SavedDate != today && st.Quantity <= 0) continue;
+            if (_bots.Any(b => b.Id == st.Id)) continue;
+            var ctx = EnsureContext(st.Symbol, st.Name, full: true);
+            var bot = TradingBot.Restore(st, ctx, this);
+            if (_options.Execution == ExecutionMode.Live && bot.HasPosition)
+            {
+                var h = snap.Holdings.FirstOrDefault(x => x.Symbol == st.Symbol);
+                bot.Reconcile(h?.Quantity is { } q ? Math.Min(q, bot.Quantity) : 0, h?.AveragePrice ?? 0);
+            }
+            _bots.Add(bot);
+            if (int.TryParse(st.Id.Split('#').LastOrDefault(), out var n)) _botSeq = Math.Max(_botSeq, n);
+            _log.Write(LogLevel.Info, bot.Id, $"봇 복원: {ctx.Name} {(bot.HasPosition ? $"보유 {bot.Quantity:N0}주 @ {bot.AveragePrice:N0}" : bot.State.ToKorean())}");
+        }
+        if (snap.OpenOrders.Count > 0)
+            _log.Write(LogLevel.Warn, "엔진", $"계좌에 미체결 주문 {snap.OpenOrders.Count}건이 있습니다. 이 프로그램이 관리하지 않으므로 필요하면 직접 정리하세요.");
+        _focus ??= _bots.FirstOrDefault()?.Symbol;
+        RecomputeSubscriptions();
     }
 
     // ================================================================ 구독/컨텍스트
