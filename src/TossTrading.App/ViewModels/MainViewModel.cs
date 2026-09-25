@@ -208,6 +208,10 @@ public sealed class MainViewModel : ViewModelBase
         }
     }
 
+    public bool HasEngine => _host.Engine is not null;
+
+    public void StopRefresh() => _timer.Stop();
+
     public async Task ShutdownAsync()
     {
         _timer.Stop();

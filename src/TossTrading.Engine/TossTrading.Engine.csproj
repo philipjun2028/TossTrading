@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
+    <!-- App(DevExpress 24.1 → .NET 8)과 Cli/Tests(.NET 10) 모두에서 쓰도록 멀티 타깃 -->
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\TossTrading.Domain\TossTrading.Domain.csproj" />

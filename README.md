@@ -23,7 +23,9 @@ cd "C:\0. Project\TossTrading"
 
 ### 2. 준비물
 
-- **.NET 10 SDK** (https://dotnet.microsoft.com/download/dotnet/10.0)
+- **.NET 10 SDK** (https://dotnet.microsoft.com/download/dotnet/10.0) — 빌드용
+- **.NET 8 Desktop Runtime** — WPF 앱 실행용. DevExpress 24.1 이 .NET 8 까지만 지원해서 앱은 `net8.0-windows` 로 빌드합니다
+  (라이브러리는 net8.0/net10.0 멀티 타깃, CLI·테스트는 .NET 10)
 - IDE: **Visual Studio 2026** 권장 (.NET 10 지원). Visual Studio 2022 를 쓰면 .NET 10 SDK 설치 후 아래 `dotnet` 명령으로 실행하세요.
 - **DevExpress WPF 24.1.7** (UI: ThemedWindow, GridControl, ChartControl, DevExpress.Mvvm, Win11Dark 테마)
   - 설치 시 등록되는 NuGet 로컬 소스 **"DevExpress 24.1 Local"** 에서 패키지를 가져옵니다.
