@@ -23,6 +23,7 @@ public sealed class ScannerService : IAsyncDisposable
     private readonly ConcurrentDictionary<string, StockInfo> _stocks = new();
     private readonly ConcurrentDictionary<string, IReadOnlyList<StockWarning>> _warnings = new();
     private readonly ConcurrentDictionary<string, decimal> _avgDailyVolume = new();
+    private readonly ConcurrentDictionary<string, IntradayStats> _intraday = new();
     private CancellationTokenSource? _cts;
     private Task? _loop;
     private volatile ScannerSettings _settings;
@@ -95,13 +96,15 @@ public sealed class ScannerService : IAsyncDisposable
         // 3) 1차 필터 (가격/등락률/틱비용) → 통과 종목만 경고/일봉 보강
         var fraction = ExpectedVolumeFraction(now);
         var amountThreshold = s.MinTradingAmount * Math.Min(1m, fraction / ExpectedVolumeFraction(Kst.At(Kst.DateOf(now), new TimeOnly(10, 0))));
+        var closingMode = s.Mode == ScanMode.ClosingBet;
+        var (minChange, maxChange) = closingMode ? (s.ClosingMinChangePct, s.ClosingMaxChangePct) : (s.MinChangePct, s.MaxChangePct);
         var pre = new List<(RankingEntry E, decimal ChangePct, decimal TickCostPct)>();
         foreach (var e in merged.Values)
         {
             var change = (e.BasePrice > 0 ? e.LastPrice / e.BasePrice - 1m : e.ChangeRate ?? 0) * 100m;
             var tickCost = TickRules.TickCostRate(e.LastPrice) * 100m;
             if (e.LastPrice < s.MinPrice) continue;
-            if (change < s.MinChangePct || change > s.MaxChangePct) continue;
+            if (change < minChange || change > maxChange) continue;
             if (tickCost > s.MaxTickCostPct) continue;
             if (e.TradingAmount < amountThreshold) continue;
             if (_stocks.TryGetValue(e.Symbol, out var info))
@@ -122,6 +125,24 @@ public sealed class ScannerService : IAsyncDisposable
             _avgDailyVolume[sym] = bars.Count > 0 ? bars.Average(b => b.Volume) : 0;
         }
 
+        // 3-2) 종가매매 모드: 후보 전체의 당일 분봉으로 고저 위치·VWAP·30분 추세 계산
+        //      (실시간 구독 중인 상위 종목만이 아니라 전부. 호출 한도를 위해 한 번에 일부씩, 오래된 것부터 갱신)
+        if (closingMode)
+        {
+            var refresh = TimeSpan.FromSeconds(Math.Max(10, s.ClosingBarsRefreshSeconds));
+            var targets = pre.OrderByDescending(p => p.E.TradingAmount).Select(p => p.E.Symbol)
+                .Select(sym => (Sym: sym, Age: _intraday.TryGetValue(sym, out var st) ? now - st.FetchedAt : TimeSpan.MaxValue))
+                .Where(x => x.Age >= refresh)
+                .OrderByDescending(x => x.Age)
+                .Take(Math.Max(1, s.ClosingBarsPerCycle))
+                .Select(x => x.Sym).ToList();
+            foreach (var sym in targets)
+            {
+                var bars = await _source.GetTodayMinuteBarsAsync(sym, ct).ConfigureAwait(false);
+                if (ComputeIntraday(bars, now) is { } stats) _intraday[sym] = stats;
+            }
+        }
+
         // 4) 최종 필터 + 점수
         var result = new List<ScanCandidate>();
         foreach (var (e, change, tickCost) in pre)
@@ -138,9 +159,9 @@ public sealed class ScannerService : IAsyncDisposable
             if (_avgDailyVolume.TryGetValue(e.Symbol, out var avg) && avg > 0)
             {
                 rvol = e.TradingVolume / (avg * fraction);
-                if (rvol < s.MinRvol) continue;
+                if (!closingMode && rvol < s.MinRvol) continue; // 종가매매는 RVOL 대신 거래대금으로 유동성 판단
             }
-            else tags.Add("RVOL?");
+            else if (!closingMode) tags.Add("RVOL?");
 
             var live = _live(e.Symbol);
             if (live?.SpreadTicks is { } spread && spread > s.MaxSpreadTicks) continue;
@@ -151,16 +172,42 @@ public sealed class ScannerService : IAsyncDisposable
             if (live?.RangePosition is >= 0.95m) tags.Add("신고가근접");
             // 종가매매 후보: 14:30~15:20, 강세(+3~20%), 고가 부근(범위 상단 75% 이상), VWAP 위
             var tNow = Kst.TimeOf(now);
-            if (tNow >= new TimeOnly(14, 30) && tNow < new TimeOnly(15, 20) && change is >= 3m and <= 20m
+            if (!closingMode && tNow >= new TimeOnly(14, 30) && tNow < new TimeOnly(15, 20) && change is >= 3m and <= 20m
                 && live?.RangePosition is >= 0.75m && vwapDist is >= 0m)
                 tags.Add("종가후보");
 
-            var score = Score(rvol, e.TradingAmount, live?.Strength, vwapDist, live?.RangePosition, tickCost, s);
             var name = _stocks.TryGetValue(e.Symbol, out var st) ? st.Name : e.Symbol;
+
+            if (closingMode)
+            {
+                _intraday.TryGetValue(e.Symbol, out var intra);
+                var rangePos = live?.RangePosition ?? RangePositionOf(e.LastPrice, intra);
+                var vwap = live is { Vwap: > 0 } ? live.Vwap : intra?.Vwap;
+                decimal? dist = vwap is > 0 ? (e.LastPrice / vwap.Value - 1m) * 100m : null;
+                decimal? trend = intra?.Close30mAgo is > 0 ? (e.LastPrice / intra.Close30mAgo.Value - 1m) * 100m : null;
+                var eval = EvaluateClosing(change, rangePos, dist, trend, live?.Strength, e.TradingAmount, s);
+                if (intra is null && live is null) tags.Add("분봉대기");
+                if (eval.AllPassed) tags.Add("종가후보");
+                result.Add(new ScanCandidate(e.Symbol, name, e.LastPrice, change, e.TradingAmount, rvol, live?.Strength,
+                    tickCost, live?.SpreadTicks, dist, rangePos, eval.Score, string.Join(" ", tags),
+                    trend, eval.Checks, eval.Passed, eval.Total));
+                continue;
+            }
+
+            var score = Score(rvol, e.TradingAmount, live?.Strength, vwapDist, live?.RangePosition, tickCost, s);
             result.Add(new ScanCandidate(e.Symbol, name, e.LastPrice, change, e.TradingAmount, rvol, live?.Strength,
                 tickCost, live?.SpreadTicks, vwapDist, live?.RangePosition, score, string.Join(" ", tags)));
         }
 
+        if (closingMode)
+        {
+            // 조건을 모두 통과한 종목 → 통과 개수 → 점수 순
+            return result
+                .OrderByDescending(c => c.ClosingPassed == c.ClosingTotal && c.ClosingTotal >= 4)
+                .ThenByDescending(c => c.ClosingPassed - (c.ClosingTotal - c.ClosingPassed) * 2)
+                .ThenByDescending(c => c.Score)
+                .Take(s.MaxCandidates).ToList();
+        }
         return result.OrderByDescending(c => c.Score).Take(s.MaxCandidates).ToList();
     }
 
@@ -175,6 +222,70 @@ public sealed class ScannerService : IAsyncDisposable
         var cost = s.MaxTickCostPct > 0 ? Math.Clamp(tickCostPct / s.MaxTickCostPct, 0, 1) : 0;
         var score = 0.30m * rv + 0.20m * am + 0.15m * st + 0.15m * vw + 0.10m * hi - 0.10m * cost;
         return Math.Round(Math.Clamp(score / 0.9m, 0, 1) * 100m, 1);
+    }
+
+    // ================================================================ 종가매매 평가
+
+    /// <summary>당일 분봉 요약: 고가·저가·VWAP·30분 전 종가</summary>
+    public sealed record IntradayStats(decimal High, decimal Low, decimal Vwap, decimal? Close30mAgo, DateTimeOffset FetchedAt);
+
+    public static IntradayStats? ComputeIntraday(IReadOnlyList<Bar> bars, DateTimeOffset now)
+    {
+        if (bars.Count == 0) return null;
+        decimal hi = 0, lo = decimal.MaxValue, vol = 0, val = 0;
+        foreach (var b in bars)
+        {
+            hi = Math.Max(hi, b.High);
+            lo = Math.Min(lo, b.Low);
+            vol += b.Volume;
+            val += b.Value > 0 ? b.Value : b.TypicalPrice * b.Volume;
+        }
+        var cutoff = now.AddMinutes(-30);
+        var ago = bars.LastOrDefault(b => b.Start <= cutoff);
+        return new IntradayStats(hi, lo, vol > 0 ? val / vol : bars[^1].Close, ago?.Close, now);
+    }
+
+    public static decimal? RangePositionOf(decimal price, IntradayStats? s)
+    {
+        if (s is null) return null;
+        var hi = Math.Max(s.High, price);
+        var lo = Math.Min(s.Low, price);
+        return hi > lo ? (price - lo) / (hi - lo) : null;
+    }
+
+    /// <summary>종가매매 평가 결과. Checks 예: "등락✔ 고가권✔ VWAP✔ 30분✖ 강도? 상한가✔"</summary>
+    public sealed record ClosingEvaluation(string Checks, int Passed, int Total, decimal Score, bool AllPassed);
+
+    /// <summary>
+    /// 봇의 종가베팅 매수 조건(ClosingBetSignal)과 같은 기준으로 후보를 평가한다.
+    /// 값이 없는 항목(?)은 통과/실패로 세지 않는다. 점수 0~100, 실패 항목 1개당 −10.
+    /// </summary>
+    public static ClosingEvaluation EvaluateClosing(
+        decimal changePct, decimal? rangePos, decimal? vwapDistPct, decimal? trend30mPct, decimal? strength,
+        decimal tradingAmount, ScannerSettings s)
+    {
+        var checks = new (string Label, bool? Ok)[]
+        {
+            ("등락", changePct >= s.ClosingMinChangePct && changePct <= s.ClosingMaxChangePct),
+            ("고가권", rangePos is { } rp ? rp >= s.ClosingMinRangePosition : null),
+            ("VWAP", vwapDistPct is { } vd ? vd >= 0 : null),
+            ("30분", trend30mPct is { } tr ? tr >= 0 : null),
+            ("강도", strength is { } st ? st >= 100m : null),
+            ("상한가", changePct < 27m), // 상한가(+30%) 3% 이내 제외
+        };
+        var passed = checks.Count(c => c.Ok == true);
+        var failed = checks.Count(c => c.Ok == false);
+        var text = string.Join(" ", checks.Select(c => c.Label + (c.Ok switch { true => "✔", false => "✖", _ => "?" })));
+
+        var rpScore = rangePos ?? 0.5m;
+        var vwScore = vwapDistPct switch { null => 0.5m, < 0 => 0m, <= 3m => 1m, <= 6m => 0.6m, _ => 0.3m };
+        var trScore = trend30mPct is { } t ? Math.Clamp((t + 1m) / 3m, 0, 1) : 0.5m;
+        var amScore = tradingAmount > 0 ? Math.Clamp(((decimal)Math.Log10((double)tradingAmount) - 9m) / 2m, 0, 1) : 0;
+        var stScore = strength is { } x ? Math.Clamp((x - 80m) / 70m, 0, 1) : 0.5m;
+        var score = (0.30m * rpScore + 0.20m * vwScore + 0.20m * trScore + 0.15m * amScore + 0.15m * stScore) * 100m - failed * 10m;
+
+        var allPassed = failed == 0 && rangePos is not null && vwapDistPct is not null;
+        return new ClosingEvaluation(text, passed, passed + failed, Math.Round(Math.Clamp(score, 0, 100), 1), allPassed);
     }
 
     /// <summary>장중 누적 거래량 비율 추정 (장 초반에 몰리는 형태)</summary>

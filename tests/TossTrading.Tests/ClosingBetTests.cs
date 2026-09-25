@@ -276,3 +276,63 @@ public class PersistenceTests
         }
     }
 }
+
+public class ClosingScannerTests
+{
+    private static readonly ScannerSettings S = new() { Mode = ScanMode.ClosingBet };
+
+    [Fact]
+    public void EvaluateClosingMarksEachCondition()
+    {
+        var good = TossTrading.Engine.Scanning.ScannerService.EvaluateClosing(8m, 0.9m, 1.5m, 0.8m, 130m, 30_000_000_000m, S);
+        Assert.True(good.AllPassed);
+        Assert.Equal(6, good.Passed);
+        Assert.Equal("등락✔ 고가권✔ VWAP✔ 30분✔ 강도✔ 상한가✔", good.Checks);
+
+        var fading = TossTrading.Engine.Scanning.ScannerService.EvaluateClosing(8m, 0.4m, -0.5m, -1.2m, null, 30_000_000_000m, S);
+        Assert.False(fading.AllPassed);
+        Assert.Equal("등락✔ 고가권✖ VWAP✖ 30분✖ 강도? 상한가✔", fading.Checks);
+        Assert.Equal(5, fading.Total); // 강도는 데이터 없음 → 집계 제외
+        Assert.True(fading.Score < good.Score);
+    }
+
+    [Fact]
+    public void ComputeIntradayUsesBarsAndThirtyMinuteReference()
+    {
+        var day = new DateOnly(2026, 9, 25);
+        var bars = Enumerable.Range(0, 60).Select(i => new Bar
+        {
+            Start = Kst.At(day, new TimeOnly(14, 0).AddMinutes(i)),
+            Open = 10_000m + i * 10, High = 10_010m + i * 10, Low = 9_990m + i * 10, Close = 10_000m + i * 10, Volume = 100,
+        }).ToList();
+        var now = Kst.At(day, new TimeOnly(15, 0));
+        var st = TossTrading.Engine.Scanning.ScannerService.ComputeIntraday(bars, now)!;
+        Assert.Equal(10_600m, st.High);
+        Assert.Equal(9_990m, st.Low);
+        Assert.Equal(10_300m, st.Close30mAgo); // 14:30 봉 종가
+        Assert.Equal(1m, TossTrading.Engine.Scanning.ScannerService.RangePositionOf(10_600m, st));
+    }
+
+    [Fact]
+    public async Task ClosingModeEvaluatesAllCandidatesWithoutLiveData()
+    {
+        var sim = new SimulatedMarket(new SimulationOptions { Seed = 42, ManualClock = true, StartTime = new TimeOnly(9, 0) });
+        sim.AdvanceTo(Kst.At(Kst.DateOf(sim.Now), new TimeOnly(15, 0)));
+        var settings = new ScannerSettings { Mode = ScanMode.ClosingBet, ClosingBarsPerCycle = 5 };
+        var scanner = new TossTrading.Engine.Scanning.ScannerService(sim, sim, settings, _ => null, _ => { }, (_, _) => { });
+
+        IReadOnlyList<ScanCandidate> result = Array.Empty<ScanCandidate>();
+        for (var i = 0; i < 10; i++) result = await scanner.ScanOnceAsync(TestContext.Current.CancellationToken);
+
+        Assert.NotEmpty(result);
+        Assert.All(result, c =>
+        {
+            Assert.NotNull(c.ClosingChecks);
+            Assert.NotNull(c.RangePosition);   // 실시간 구독 없이도 분봉으로 계산
+            Assert.NotNull(c.VwapDistPct);
+            Assert.InRange(c.ChangePct, 3m, 20m);
+        });
+        var firstFail = result.ToList().FindIndex(c => !c.Tags.Contains("종가후보"));
+        if (firstFail >= 0) Assert.DoesNotContain(result.Skip(firstFail), c => c.Tags.Contains("종가후보")); // 통과 종목이 위로
+    }
+}

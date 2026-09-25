@@ -21,6 +21,10 @@ public sealed class CandidateRow : BindableBase
     public decimal? VwapDist { get => GetValue<decimal?>(); set => SetValue(value); }
     public decimal Score { get => GetValue<decimal>(); set => SetValue(value); }
     public string Tags { get => GetValue<string>(); set => SetValue(value); }
+    public decimal? RangePosPct { get => GetValue<decimal?>(); set => SetValue(value); }
+    public decimal? Trend30m { get => GetValue<decimal?>(); set => SetValue(value); }
+    public string? Checks { get => GetValue<string?>(); set => SetValue(value); }
+    public string PassText { get => GetValue<string>(); set => SetValue(value); }
 
     public void Update(ScanCandidate c)
     {
@@ -35,6 +39,10 @@ public sealed class CandidateRow : BindableBase
         VwapDist = c.VwapDistPct is { } v ? Math.Round(v, 1) : null;
         Score = Math.Round(c.Score, 0);
         Tags = c.Tags;
+        RangePosPct = c.RangePosition is { } rp ? Math.Round(rp * 100m, 0) : null;
+        Trend30m = c.Trend30mPct is { } t ? Math.Round(t, 1) : null;
+        Checks = c.ClosingChecks;
+        PassText = c.ClosingTotal > 0 ? $"{c.ClosingPassed}/{c.ClosingTotal}" : "";
     }
 }
 

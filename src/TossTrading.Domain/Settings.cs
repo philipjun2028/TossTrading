@@ -172,6 +172,20 @@ public sealed class ScannerSettings
     /// <summary>실시간 체결 구독할 상위 후보 수 (웹소켓 토픽 예산)</summary>
     public int LiveSubscribeTop { get; set; } = 20;
 
+    // ---- 종가매매 모드 ----
+    public ScanMode Mode { get; set; } = ScanMode.DayTrading;
+    public decimal ClosingMinChangePct { get; set; } = 3m;
+    public decimal ClosingMaxChangePct { get; set; } = 20m;
+
+    /// <summary>당일 고저 범위 내 위치 하한 (0~1)</summary>
+    public decimal ClosingMinRangePosition { get; set; } = 0.75m;
+
+    /// <summary>한 번 스캔할 때 분봉을 새로 조회할 최대 종목 수 (호출 한도 보호)</summary>
+    public int ClosingBarsPerCycle { get; set; } = 8;
+
+    /// <summary>분봉 캐시 갱신 주기 (초)</summary>
+    public int ClosingBarsRefreshSeconds { get; set; } = 60;
+
     public ScannerSettings Clone() => (ScannerSettings)MemberwiseClone();
 }
 

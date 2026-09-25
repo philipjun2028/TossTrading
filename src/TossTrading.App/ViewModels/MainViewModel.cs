@@ -26,6 +26,7 @@ public sealed class MainViewModel : ViewModelBase
         Status = "중지됨 — [시작]을 눌러 주세요";
         ChartTitle = "차트: 종목을 선택하세요";
         SelectedPreset = PresetNames.FirstOrDefault();
+        ScannerMode = Settings.Scanner.Mode;
 
         StartCommand = new AsyncCommand(StartAsync);
         StopCommand = new AsyncCommand(StopAsync);
@@ -69,6 +70,38 @@ public sealed class MainViewModel : ViewModelBase
     };
 
     public IReadOnlyList<string> PresetNames => Settings.Presets.Keys.ToList();
+
+    public IReadOnlyList<EnumOption<ScanMode>> ScanModeOptions { get; } = new[]
+    {
+        new EnumOption<ScanMode>(ScanMode.DayTrading, "단타 (Stocks in Play)"),
+        new EnumOption<ScanMode>(ScanMode.ClosingBet, "종가매매 후보"),
+    };
+
+    private const string ClosingPresetName = "종가베팅 (익일 매도)";
+
+    /// <summary>스캐너 모드. 바꾸면 즉시 엔진 스캐너에 반영하고, 봇 추가 프리셋도 맞춰 바꾼다.</summary>
+    public ScanMode ScannerMode
+    {
+        get => GetValue<ScanMode>();
+        set => SetValue(value, () =>
+        {
+            Settings.Scanner.Mode = value;
+            SettingsStore.Save(Settings);
+            Engine?.UpdateScanner(Settings.Scanner.Clone());
+            RaisePropertyChanged(nameof(IsClosingMode));
+            RaisePropertyChanged(nameof(IsDayMode));
+            RaisePropertyChanged(nameof(ScannerHeader));
+            if (value == ScanMode.ClosingBet && Settings.Presets.ContainsKey(ClosingPresetName)) SelectedPreset = ClosingPresetName;
+            else if (value == ScanMode.DayTrading && SelectedPreset == ClosingPresetName) SelectedPreset = PresetNames.FirstOrDefault();
+        });
+    }
+
+    public bool IsClosingMode => ScannerMode == ScanMode.ClosingBet;
+    public bool IsDayMode => !IsClosingMode;
+
+    public string ScannerHeader => IsClosingMode
+        ? "스캐너 — 종가매매 후보 (봇 매수 조건 기준 평가 · 조건 모두 통과 종목이 위로)"
+        : "스캐너 — Stocks in Play (거래대금·RVOL·등락률·틱비용·경고 필터)";
 
     // ---------------------------------------------------------------- 상태 속성
     public bool IsRunning

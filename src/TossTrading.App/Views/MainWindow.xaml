@@ -117,8 +117,17 @@
                 <ColumnDefinition Width="7*" />
             </Grid.ColumnDefinitions>
 
-            <GroupBox Grid.Column="0" Header="스캐너 — Stocks in Play (거래대금·RVOL·등락률·틱비용·경고 필터)" Margin="4">
+            <GroupBox Grid.Column="0" Header="{Binding ScannerHeader}" Margin="4">
                 <DockPanel>
+                    <DockPanel DockPanel.Dock="Top" Margin="0,0,0,4">
+                        <TextBlock Text="모드" Style="{StaticResource Caption}" Margin="4,0" />
+                        <dxe:ComboBoxEdit Width="180" Margin="3" IsTextEditable="False"
+                                          ItemsSource="{Binding ScanModeOptions}" DisplayMember="Label" ValueMember="Value"
+                                          EditValue="{Binding ScannerMode}" />
+                        <TextBlock Margin="8,0" Foreground="{StaticResource SubText}" FontSize="11" TextWrapping="Wrap" VerticalAlignment="Center"
+                                   Visibility="{Binding IsClosingMode, Converter={StaticResource BoolToVis}}"
+                                   Text="14:30 이후 사용 권장. ✔ 통과 ✖ 실패 ? 데이터 없음 · 상위 종목에 '종가베팅' 프리셋으로 봇 추가 → 15:00~15:19 에 봇이 조건 재확인 후 매수" />
+                    </DockPanel>
                     <WrapPanel DockPanel.Dock="Bottom" Margin="0,4,0,0">
                         <TextBlock Text="프리셋" Style="{StaticResource Caption}" Margin="4,0" />
                         <dxe:ComboBoxEdit Width="180" Margin="3" IsTextEditable="False" ItemsSource="{Binding PresetNames}" EditValue="{Binding SelectedPreset}" />
@@ -138,7 +147,7 @@
                             <dxg:GridColumn FieldName="TradingAmountEok" Header="거래대금(억)" Width="75">
                                 <dxg:GridColumn.EditSettings><dxe:TextEditSettings DisplayFormat="N0" HorizontalContentAlignment="Right" /></dxg:GridColumn.EditSettings>
                             </dxg:GridColumn>
-                            <dxg:GridColumn FieldName="Rvol" Header="RVOL" Width="50">
+                            <dxg:GridColumn FieldName="Rvol" Header="RVOL" Width="50" Visible="{Binding IsDayMode}">
                                 <dxg:GridColumn.EditSettings><dxe:TextEditSettings DisplayFormat="F1" HorizontalContentAlignment="Right" /></dxg:GridColumn.EditSettings>
                             </dxg:GridColumn>
                             <dxg:GridColumn FieldName="Strength" Header="체결강도" Width="60">
@@ -154,6 +163,15 @@
                                 <dxg:GridColumn.EditSettings><dxe:TextEditSettings DisplayFormat="F0" HorizontalContentAlignment="Right" /></dxg:GridColumn.EditSettings>
                             </dxg:GridColumn>
                             <dxg:GridColumn FieldName="Tags" Header="태그" Width="90" />
+                            <dxg:GridColumn FieldName="RangePosPct" Header="고가권%" Width="55" Visible="{Binding IsClosingMode}"
+                                            ToolTip="당일 저가~고가 중 현재가 위치 (100 = 고가)">
+                                <dxg:GridColumn.EditSettings><dxe:TextEditSettings DisplayFormat="F0" HorizontalContentAlignment="Right" /></dxg:GridColumn.EditSettings>
+                            </dxg:GridColumn>
+                            <dxg:GridColumn FieldName="Trend30m" Header="30분%" Width="55" Visible="{Binding IsClosingMode}">
+                                <dxg:GridColumn.EditSettings><dxe:TextEditSettings DisplayFormat="+0.0;-0.0" HorizontalContentAlignment="Right" /></dxg:GridColumn.EditSettings>
+                            </dxg:GridColumn>
+                            <dxg:GridColumn FieldName="PassText" Header="통과" Width="40" Visible="{Binding IsClosingMode}" />
+                            <dxg:GridColumn FieldName="Checks" Header="종가 조건" Width="210" Visible="{Binding IsClosingMode}" />
                         </dxg:GridControl.Columns>
                         <dxg:GridControl.View>
                             <dxg:TableView AllowEditing="False" ShowGroupPanel="False" AutoWidth="True" NavigationStyle="Row"
@@ -166,6 +184,11 @@
                                         <dx:Format Foreground="#FF3B82F6" />
                                     </dxg:FormatCondition>
                                     <dxg:DataBarFormatCondition FieldName="Score" PredefinedFormatName="BlueGradientDataBar" />
+                                    <dxg:FormatCondition FieldName="Name" Expression="Contains([Tags], '종가후보')" ApplyToRow="True">
+                                        <dx:Format FontWeight="Bold" />
+                                    </dxg:FormatCondition>
+                                    <dxg:FormatCondition FieldName="Trend30m" Expression="[Trend30m] &gt; 0"><dx:Format Foreground="#FFF04452" /></dxg:FormatCondition>
+                                    <dxg:FormatCondition FieldName="Trend30m" Expression="[Trend30m] &lt; 0"><dx:Format Foreground="#FF3B82F6" /></dxg:FormatCondition>
                                 </dxg:TableView.FormatConditions>
                             </dxg:TableView>
                         </dxg:GridControl.View>

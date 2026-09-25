@@ -37,7 +37,11 @@ public sealed record ScanCandidate(
     decimal? VwapDistPct,
     decimal? RangePosition,
     decimal Score,
-    string Tags);
+    string Tags,
+    decimal? Trend30mPct = null,
+    string? ClosingChecks = null,
+    int ClosingPassed = 0,
+    int ClosingTotal = 0);
 
 public sealed record BotView(
     string Id,

@@ -67,6 +67,9 @@ public enum NextDayExitMode
 
 public enum SizingMode { RiskBased, FixedAmount }
 
+/// <summary>스캐너 모드: 단타(Stocks in Play) / 종가매매 후보</summary>
+public enum ScanMode { DayTrading, ClosingBet }
+
 public enum BotState
 {
     Idle,
