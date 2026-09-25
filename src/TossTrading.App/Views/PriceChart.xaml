@@ -32,7 +32,7 @@
                                      LowValueDataMember="Low" CloseValueDataMember="Close"
                                      Brush="#FFF04452" CandleWidth="0.7">
                 <dxc:CandleStickSeries2D.ReductionOptions>
-                    <dxc:ReductionStockOptions Brush="#FF3B82F6" ColorMode="OpenToCloseValue" Level="Close" />
+                    <dxc:ReductionStockOptions Brush="#FF3B82F6" ColorMode="OpenToCloseValue" Level="CloseValue" />
                 </dxc:CandleStickSeries2D.ReductionOptions>
             </dxc:CandleStickSeries2D>
 
