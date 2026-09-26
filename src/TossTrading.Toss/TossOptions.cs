@@ -18,6 +18,15 @@ public sealed class TossOptions
     /// 서버 응답 헤더 X-RateLimit-Limit 이 더 낮으면 자동으로 낮춘다.
     /// </summary>
     public int MarketDataPerSecond { get; set; } = 10;
+
+    /// <summary>캔들 (MARKET_DATA_CHART, 공식 20/s)</summary>
+    public int ChartPerSecond { get; set; } = 15;
+
+    /// <summary>순위 (RANKING, 공식 5/s)</summary>
+    public int RankingPerSecond { get; set; } = 4;
+
+    /// <summary>전체 종목 목록 (STOCK_ALL, 공식 1/s)</summary>
+    public int StockAllPerSecond { get; set; } = 1;
     public int StockPerSecond { get; set; } = 4;
     public int AccountPerSecond { get; set; } = 1;
     public int AssetPerSecond { get; set; } = 4;
@@ -28,4 +37,5 @@ public sealed class TossOptions
 }
 
 /// <summary>호출 한도 그룹 (엔드포인트 → 그룹 매핑은 추정치, 공식 문서로 확인 필요)</summary>
-public enum RateGroup { Auth, MarketData, Stock, Account, Asset, Order, OrderQuery }
+/// <summary>토스 API 호출 한도 그룹 (공식 문서의 Rate Limits Group 과 대응)</summary>
+public enum RateGroup { Auth, MarketData, Stock, Account, Asset, Order, OrderQuery, Chart, Ranking, StockAll }

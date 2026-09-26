@@ -295,3 +295,63 @@ public class TossHistoryProviderTests
         Assert.Equal(expected, string.Join(",", durations));
     }
 }
+
+public class TossUniverseTests
+{
+    private const string Token = """{"access_token":"tok-1","token_type":"Bearer","expires_in":3600}""";
+
+    private static (TossMarketDataSource Source, FakeHandler Handler) Create()
+    {
+        var handler = new FakeHandler();
+        var options = new TossOptions { ClientId = "id", ClientSecret = "secret", BaseUrl = "https://example.test" };
+        return (new TossMarketDataSource(new TossRestClient(options, new HttpClient(handler))), handler);
+    }
+
+    [Fact]
+    public async Task UniverseIsAllKospiAndKosdaqStocks()
+    {
+        var (source, handler) = Create();
+        handler.Respond = req => req.RequestUri!.AbsolutePath switch
+        {
+            "/oauth2/token" => FakeHandler.Json(Token),
+            "/api/v1/stocks/all" when req.RequestUri.Query.Contains("market=KOSPI") => FakeHandler.Json("""
+                {"result":[{"symbol":"005930","name":"삼성전자","securityType":"STOCK","isCommonShare":true,"isinCode":"KR7005930003"},
+                           {"symbol":"005935","name":"삼성전자우","securityType":"STOCK","isCommonShare":false,"isinCode":"KR7005931001"}]}
+                """),
+            "/api/v1/stocks/all" => FakeHandler.Json("""
+                {"result":[{"symbol":"247540","name":"에코프로비엠","securityType":"STOCK","isCommonShare":true,"isinCode":"KR7247540008"}]}
+                """),
+            _ => new HttpResponseMessage(HttpStatusCode.NotFound),
+        };
+
+        var universe = await new TossHistoryProvider(source).GetUniverseAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(new[] { "005930", "005935", "247540" }, universe.Select(u => u.Symbol));
+        Assert.Equal("KOSDAQ", universe[2].Market);
+        Assert.False(universe[1].IsCommonShare);
+        var calls = handler.Requests.Where(r => r.Request.RequestUri!.AbsolutePath == "/api/v1/stocks/all").ToList();
+        Assert.Equal(2, calls.Count);
+        Assert.All(calls, c => Assert.Contains("status=ACTIVE", c.Request.RequestUri!.Query));
+    }
+
+    [Fact]
+    public async Task FallsBackToRankingsWhenStockListFails()
+    {
+        var (source, handler) = Create();
+        handler.Respond = req => req.RequestUri!.AbsolutePath switch
+        {
+            "/oauth2/token" => FakeHandler.Json(Token),
+            "/api/v1/stocks/all" => FakeHandler.Json("""{"error":{"requestId":"r","code":"forbidden","message":"no"}}""", HttpStatusCode.Forbidden),
+            "/api/v1/rankings" => FakeHandler.Json("""
+                {"result":{"rankedAt":"2026-09-03T19:59:56+09:00","rankings":[
+                  {"rank":1,"symbol":"459550","currency":"KRW","price":{"lastPrice":"2570","basePrice":"1979","changeRate":"0.29"},"tradingVolume":"1","tradingAmount":"1"}]}}
+                """),
+            "/api/v1/stocks" => FakeHandler.Json("""
+                {"result":[{"symbol":"459550","name":"테스트","market":"KOSDAQ","securityType":"STOCK","isCommonShare":true,"status":"ACTIVE"}]}
+                """),
+            _ => new HttpResponseMessage(HttpStatusCode.NotFound),
+        };
+
+        var universe = await new TossHistoryProvider(source).GetUniverseAsync(TestContext.Current.CancellationToken);
+        Assert.Equal("459550", Assert.Single(universe).Symbol);
+    }
+}

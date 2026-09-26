@@ -148,6 +148,9 @@ public sealed class TossRestClient : IDisposable
             // 주문 생성/정정/취소는 엔진 OrderManager 가 별도로 한도 관리 → 여기선 넉넉히
             [RateGroup.Order] = Gate(RateGroup.Order, () => 20),
             [RateGroup.OrderQuery] = Gate(RateGroup.OrderQuery, () => options.OrderQueryPerSecond),
+            [RateGroup.Chart] = Gate(RateGroup.Chart, () => options.ChartPerSecond),
+            [RateGroup.Ranking] = Gate(RateGroup.Ranking, () => options.RankingPerSecond),
+            [RateGroup.StockAll] = Gate(RateGroup.StockAll, () => options.StockAllPerSecond),
         };
     }
 
@@ -172,7 +175,7 @@ public sealed class TossRestClient : IDisposable
     {
         var q = new Dictionary<string, string?> { ["symbol"] = symbol, ["interval"] = interval, ["count"] = count.ToString(CultureInfo.InvariantCulture) };
         if (before is { } b) q["before"] = b.ToString("yyyy-MM-dd'T'HH:mm:ssK", CultureInfo.InvariantCulture);
-        return GetAsync<CandlePageDto>("/api/v1/candles", q, RateGroup.MarketData, false, ct);
+        return GetAsync<CandlePageDto>("/api/v1/candles", q, RateGroup.Chart, false, ct);
     }
 
     public Task<PriceLimitsDto> GetPriceLimitsAsync(string symbol, CancellationToken ct) =>
@@ -188,11 +191,19 @@ public sealed class TossRestClient : IDisposable
             ["count"] = count.ToString(CultureInfo.InvariantCulture),
         };
         if (excludeCaution is { } ex) q["excludeInvestmentCaution"] = ex ? "true" : "false";
-        return GetAsync<RankingsDto>("/api/v1/rankings", q, RateGroup.MarketData, false, ct);
+        return GetAsync<RankingsDto>("/api/v1/rankings", q, RateGroup.Ranking, false, ct);
     }
 
     public Task<List<StockDto>> GetStocksAsync(IEnumerable<string> symbols, CancellationToken ct) =>
         GetAsync<List<StockDto>>("/api/v1/stocks", new() { ["symbols"] = string.Join(",", symbols) }, RateGroup.Stock, false, ct);
+
+    /// <summary>마켓 전체 종목 (GET /api/v1/stocks/all, 하루 1회 갱신되는 데이터). market: KOSPI, KOSDAQ</summary>
+    public Task<List<ListedStockDto>> GetAllStocksAsync(string market, string? status, CancellationToken ct)
+    {
+        var q = new Dictionary<string, string?> { ["market"] = market };
+        if (status is not null) q["status"] = status;
+        return GetAsync<List<ListedStockDto>>("/api/v1/stocks/all", q, RateGroup.StockAll, false, ct);
+    }
 
     public Task<List<WarningDto>> GetWarningsAsync(string symbol, CancellationToken ct) =>
         GetAsync<List<WarningDto>>($"/api/v1/stocks/{Uri.EscapeDataString(symbol)}/warnings", null, RateGroup.Stock, false, ct);

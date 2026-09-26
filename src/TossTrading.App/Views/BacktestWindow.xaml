@@ -38,7 +38,7 @@
                     </StackPanel>
                     <TextBlock Text="추가 종목 코드" VerticalAlignment="Center" Margin="4,0" />
                     <dxe:TextEdit Margin="3" EditValue="{Binding ExtraSymbols, UpdateSourceTrigger=PropertyChanged}"
-                                  NullText="예) 005930, 000660 — 과거 순위는 조회가 안 돼 현재 상위 종목 + 여기 적은 종목이 대상" />
+                                  NullText="(선택) 예) 005930, 000660 — 토스 데이터는 코스피·코스닥 전체 종목이 대상이라 보통 비워 두면 됩니다" />
                 </DockPanel>
                 <DockPanel Margin="0,4,0,0">
                     <dxe:ProgressBarEdit DockPanel.Dock="Left" Width="260" Height="16" Margin="4,0" Minimum="0" Maximum="100" EditValue="{Binding Progress, Mode=OneWay}" />

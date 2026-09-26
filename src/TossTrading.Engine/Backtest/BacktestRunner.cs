@@ -105,10 +105,14 @@ public sealed class BacktestRunner
         var dailyCount = _o.To.DayNumber - _o.From.DayNumber + 40; // 기간 + RVOL 계산용 20거래일 여유
         var daily = new Dictionary<string, IReadOnlyList<Bar>>();
         var n = 0;
+        var dailyStarted = DateTime.UtcNow;
         foreach (var sym in infos.Keys.ToList())
         {
             ct.ThrowIfCancellationRequested();
-            Report("일봉", ++n, infos.Count, $"{infos[sym].Name} 일봉");
+            n++;
+            var eta = n > 20 ? TimeSpan.FromSeconds((DateTime.UtcNow - dailyStarted).TotalSeconds / n * (infos.Count - n)) : (TimeSpan?)null;
+            Report("일봉", n, infos.Count,
+                $"{infos[sym].Name} 일봉 ({n:N0}/{infos.Count:N0}{(eta is { } e && e.TotalSeconds > 5 ? $", 약 {e.TotalMinutes:0.#}분 남음 — 받은 데이터는 저장되어 다음부터 빠름" : "")})");
             try
             {
                 var bars = await _history.GetDailyBarsAsync(sym, _o.To, dailyCount, ct).ConfigureAwait(false);

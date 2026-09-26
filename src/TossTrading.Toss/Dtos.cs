@@ -137,6 +137,14 @@ public sealed class StockDto
     public KoreanMarketDetailDto? KoreanMarketDetail { get; set; }
 }
 
+public sealed class ListedStockDto
+{
+    public string Symbol { get; set; } = "";
+    public string Name { get; set; } = "";
+    public string? SecurityType { get; set; }
+    public bool IsCommonShare { get; set; }
+}
+
 public sealed class WarningDto
 {
     public string WarningType { get; set; } = "";

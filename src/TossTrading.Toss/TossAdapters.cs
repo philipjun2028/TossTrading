@@ -64,6 +64,16 @@ public sealed class TossMarketDataSource : IMarketDataSource
         return r.Rankings.Select(i => new RankingEntry(i.Rank, i.Symbol, i.Price.LastPrice, i.Price.BasePrice, i.Price.ChangeRate, i.TradingVolume, i.TradingAmount)).ToList();
     }
 
+    /// <summary>코스피·코스닥 전체 상장 종목 (종목 유니버스)</summary>
+    public async Task<IReadOnlyList<StockInfo>> GetAllStocksAsync(IEnumerable<string> markets, CancellationToken ct)
+    {
+        var result = new List<StockInfo>();
+        foreach (var market in markets)
+            foreach (var s in await _rest.GetAllStocksAsync(market, "ACTIVE", ct).ConfigureAwait(false))
+                result.Add(new StockInfo(s.Symbol, s.Name, market, s.SecurityType ?? "", s.IsCommonShare, false, false));
+        return result;
+    }
+
     /// <summary>순위 원본 조회 (type·duration 직접 지정). duration: realtime, 1d, 1w, 1mo, 3mo, 6mo, 1y</summary>
     public async Task<IReadOnlyList<RankingEntry>> GetRankingsRawAsync(string type, string duration, int count, CancellationToken ct)
     {
@@ -387,8 +397,9 @@ public sealed class TossConnection : IAsyncDisposable
 
 /// <summary>
 /// 토스 과거 데이터 (백테스트).
-/// 순위 API 는 "특정 시점" 조회가 안 되고 항상 호출 시점 기준이다. 대신 집계 기간(1w/1mo/3mo/6mo/1y)을 지원하므로
-/// 백테스트 시작일까지 거슬러 올라가는 기간의 거래대금·거래량·상승률 상위 종목을 모아 대상 풀을 넓힌다.
+/// 대상 종목 = 코스피·코스닥 **전체 상장 종목**(/stocks/all). 날짜별로 일봉을 보고 그날 후보가 될 수 있었던 종목만 분봉을 받는다.
+/// 전체 목록 조회가 실패하면 순위(현재 + 백테스트 기간을 덮는 1w~1y 집계) 상위 종목으로 대신한다
+/// (순위 API 는 특정 시점 조회가 안 되고 항상 호출 시점 기준).
 /// 호출 한도는 TossRestClient 의 시세 그룹 제한을 따른다. CachedHistoryProvider 로 감싸서 쓰는 것을 권장.
 /// </summary>
 public sealed class TossHistoryProvider : IHistoryProvider
@@ -420,6 +431,18 @@ public sealed class TossHistoryProvider : IHistoryProvider
     }
 
     public async Task<IReadOnlyList<StockInfo>> GetUniverseAsync(CancellationToken ct)
+    {
+        try
+        {
+            var all = await _source.GetAllStocksAsync(new[] { "KOSPI", "KOSDAQ" }, ct).ConfigureAwait(false);
+            if (all.Count > 0) return all;
+        }
+        catch (TossApiException) { /* 아래 순위 기반으로 대체 */ }
+        return await GetRankedUniverseAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <summary>순위 기반 대상 풀 (전체 목록을 못 받을 때)</summary>
+    public async Task<IReadOnlyList<StockInfo>> GetRankedUniverseAsync(CancellationToken ct)
     {
         var symbols = new HashSet<string>();
         // 현재 순위
