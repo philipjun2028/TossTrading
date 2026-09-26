@@ -130,18 +130,19 @@ public sealed class BotSettings
 /// <summary>계좌 레벨 리스크 한도 (설계 문서 7.2)</summary>
 public sealed class RiskSettings
 {
-    public decimal DailyLossLimitPct { get; set; } = 1.5m;
+    public decimal DailyLossLimitPct { get; set; } = 2.0m;
 
     /// <summary>일 목표 수익 % (0 = 사용 안 함). 도달 시 신규 진입 중지.</summary>
     public decimal DailyProfitTargetPct { get; set; } = 0m;
 
-    public int MaxConcurrentPositions { get; set; } = 4;
-    public decimal MaxTotalExposurePct { get; set; } = 60m;
+    /// <summary>동시 보유 종목 한도 (단타 봇 6 + 전날 종가 보유 4 가 겹쳐도 되도록)</summary>
+    public int MaxConcurrentPositions { get; set; } = 10;
+    public decimal MaxTotalExposurePct { get; set; } = 90m;
 
     /// <summary>1회 주문 금액 상한 (1억 이상은 토스 확인 플래그 필요 → 기본 5천만)</summary>
     public decimal MaxOrderAmount { get; set; } = 50_000_000m;
 
-    public int MaxConsecutiveLosses { get; set; } = 4;
+    public int MaxConsecutiveLosses { get; set; } = 6;
     public int ConsecutiveLossCooldownMinutes { get; set; } = 30;
     public int MaxOrderErrorsPerBot { get; set; } = 3;
     public bool FlattenOnDailyLossLimit { get; set; } = false;
@@ -167,10 +168,10 @@ public sealed class ScannerSettings
     public decimal MaxTickCostPct { get; set; } = 0.15m;
     public int MaxSpreadTicks { get; set; } = 3;
     public bool ExcludeNonCommonStock { get; set; } = true;
-    public int MaxCandidates { get; set; } = 30;
+    public int MaxCandidates { get; set; } = 40;
 
     /// <summary>실시간 체결 구독할 상위 후보 수 (웹소켓 토픽 예산)</summary>
-    public int LiveSubscribeTop { get; set; } = 20;
+    public int LiveSubscribeTop { get; set; } = 30;
 
     // ---- 종가매매 모드 ----
     public ScanMode Mode { get; set; } = ScanMode.DayTrading;
@@ -248,13 +249,13 @@ public sealed class AutoPilotSettings
     /// <summary>단타 보유분 정리 (종가매매 자금 확보)</summary>
     public TimeOnly DayExitTime { get; set; } = new(14, 50);
 
-    public int MaxDayBots { get; set; } = 3;
+    public int MaxDayBots { get; set; } = 6;
 
     /// <summary>단타 후보 최소 점수 (0 = 제한 없음)</summary>
     public decimal MinDayScore { get; set; } = 50m;
 
     /// <summary>이 시간 동안 진입이 없고 상위 후보에서 밀려난 단타 봇은 다른 종목으로 교체 (0 = 교체 안 함)</summary>
-    public int IdleReplaceMinutes { get; set; } = 30;
+    public int IdleReplaceMinutes { get; set; } = 20;
 
     public string MorningPreset { get; set; } = "ORB 표준";
 
@@ -277,7 +278,7 @@ public sealed class AutoPilotSettings
     public TimeOnly ClosingSelectTime { get; set; } = new(14, 55);
     public TimeOnly ClosingSelectEndTime { get; set; } = new(15, 15);
 
-    public int MaxClosingBots { get; set; } = 2;
+    public int MaxClosingBots { get; set; } = 4;
 
     /// <summary>종가 후보 조건 최소 통과 수 (0 = 전부 통과)</summary>
     public int ClosingMinPassed { get; set; }

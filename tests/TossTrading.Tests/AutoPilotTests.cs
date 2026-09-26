@@ -67,7 +67,7 @@ public class AutoPilotTests
         _ap.OnTimer();
 
         Assert.Equal(ScanMode.DayTrading, _host.Mode);
-        Assert.Equal(new[] { "A", "B", "D" }, _host.BotList.Select(b => b.Symbol));   // 최대 3개, 점수 50 미만 제외
+        Assert.Equal(new[] { "A", "B", "D", "E" }, _host.BotList.Select(b => b.Symbol)); // 점수 50 미만(C) 제외, 최대 6개
         var bot = _host.BotList[0];
         Assert.Equal(AutoPilot.DayRole, bot.AutoRole);
         Assert.Equal(BotMode.FullAuto, bot.Settings.Mode);
@@ -116,7 +116,7 @@ public class AutoPilotTests
         _host.Clock.Now = _host.Clock.Now.AddMinutes(31);
         _ap.OnTimer();
         Assert.DoesNotContain(_host.BotList, b => b.Symbol == "A");
-        Assert.Equal(3, _host.BotList.Count);
+        Assert.Equal(6, _host.BotList.Count);                                        // 기본 최대 6개
     }
 
     [Fact]

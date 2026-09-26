@@ -36,7 +36,7 @@ public sealed class BacktestViewModel : ViewModelBase
         StartingCash = settings.PaperStartingCash > 0 ? settings.PaperStartingCash : 10_000_000m;
         DayTradingEnabled = settings.AutoPilot.DayTradingEnabled;
         ClosingEnabled = settings.AutoPilot.ClosingEnabled;
-        MaxSymbolsPerDay = 40;
+        MaxSymbolsPerDay = 60;
         IntrabarPath = "conservative";
         ExtraSymbols = "";
         Progress = 0;
