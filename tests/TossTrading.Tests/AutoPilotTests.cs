@@ -121,6 +121,25 @@ public class AutoPilotTests
     }
 
     [Fact]
+    public void ExpiredMorningOrbBotHandsSymbolToDayPreset()
+    {
+        _ap.UpdatePlan(AutoPilotPlan.FromPresets(new AutoPilotSettings { Enabled = true, DayPreset = BotPresets.VwapTrend }, BotPresets.CreateDefaults()));
+        At(9, 10);
+        _host.CandidateList = new() { Day("A", 80) };
+        _ap.OnTimer();
+        var orb = Assert.Single(_host.BotList);
+        Assert.Equal(EntryStrategyKind.OpeningRangeBreakout, orb.Settings.Strategy);
+
+        _host.Clock.Now = _host.Clock.Now.AddMinutes(21);                          // 09:31 — ORB 진입 시간(~09:30) 지남
+        _ap.OnTimer();                                                              // 진입 못 한 ORB 봇 정리
+        _host.Clock.Now = _host.Clock.Now.AddMinutes(1);
+        _ap.OnTimer();
+        var day = Assert.Single(_host.BotList);                                     // 같은 종목을 장중 프리셋으로 다시 고른다
+        Assert.Equal(EntryStrategyKind.VwapReclaim, day.Settings.Strategy);
+        Assert.True(day.Settings.VwapRequireAboveMa20);
+    }
+
+    [Fact]
     public void IdleBotIsReplacedWhenDroppedFromTopCandidates()
     {
         At(9, 10);
