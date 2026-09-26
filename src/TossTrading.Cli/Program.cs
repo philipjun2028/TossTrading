@@ -176,7 +176,7 @@ static async Task<int> BacktestAsync(string[] args, string? dataDir, string? sou
         var secret = Environment.GetEnvironmentVariable("TOSS_CLIENT_SECRET");
         if (string.IsNullOrEmpty(id) || string.IsNullOrEmpty(secret)) { Console.WriteLine("TOSS_CLIENT_ID / TOSS_CLIENT_SECRET 환경변수를 설정하세요."); return 1; }
         conn = new TossConnection(new TossOptions { ClientId = id, ClientSecret = secret });
-        provider = new TossTrading.Engine.Backtest.CachedHistoryProvider(new TossHistoryProvider(conn.Source), Path.Combine(dataDir, "history"));
+        provider = new TossTrading.Engine.Backtest.CachedHistoryProvider(new TossHistoryProvider(conn.Source, from), Path.Combine(dataDir, "history"));
     }
     else
     {

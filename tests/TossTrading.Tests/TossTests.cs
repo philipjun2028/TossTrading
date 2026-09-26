@@ -279,3 +279,19 @@ public class TossStreamTests
         Assert.Equal("us", TossStreamClient.MarketOf("AAPL"));
     }
 }
+
+public class TossHistoryProviderTests
+{
+    [Theory]
+    [InlineData(null, "1d")]
+    [InlineData("2026-09-22", "1d,1w")]
+    [InlineData("2026-09-01", "1d,1w,1mo")]
+    [InlineData("2026-07-01", "1d,1w,1mo,3mo")]
+    [InlineData("2025-12-01", "1d,1w,1mo,3mo,6mo,1y")]
+    public void PeriodRankingsCoverBacktestStart(string? from, string expected)
+    {
+        var today = new DateOnly(2026, 9, 26);
+        var durations = TossTrading.Toss.TossHistoryProvider.DurationsFor(from is null ? null : DateOnly.Parse(from), today);
+        Assert.Equal(expected, string.Join(",", durations));
+    }
+}

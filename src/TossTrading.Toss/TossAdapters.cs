@@ -64,6 +64,13 @@ public sealed class TossMarketDataSource : IMarketDataSource
         return r.Rankings.Select(i => new RankingEntry(i.Rank, i.Symbol, i.Price.LastPrice, i.Price.BasePrice, i.Price.ChangeRate, i.TradingVolume, i.TradingAmount)).ToList();
     }
 
+    /// <summary>순위 원본 조회 (type·duration 직접 지정). duration: realtime, 1d, 1w, 1mo, 3mo, 6mo, 1y</summary>
+    public async Task<IReadOnlyList<RankingEntry>> GetRankingsRawAsync(string type, string duration, int count, CancellationToken ct)
+    {
+        var r = await _rest.GetRankingsAsync(type, "KR", duration, Math.Min(count, 100), excludeCaution: true, ct).ConfigureAwait(false);
+        return r.Rankings.Select(i => new RankingEntry(i.Rank, i.Symbol, i.Price.LastPrice, i.Price.BasePrice, i.Price.ChangeRate, i.TradingVolume, i.TradingAmount)).ToList();
+    }
+
     public async Task<IReadOnlyList<PriceQuote>> GetPricesAsync(IReadOnlyList<string> symbols, CancellationToken ct)
     {
         var result = new List<PriceQuote>();
@@ -379,23 +386,57 @@ public sealed class TossConnection : IAsyncDisposable
 }
 
 /// <summary>
-/// 토스 과거 데이터 (백테스트). 과거 순위는 조회할 수 없어 현재 거래대금·거래량·상승률 상위 종목을 대상 풀로 쓴다.
+/// 토스 과거 데이터 (백테스트).
+/// 순위 API 는 "특정 시점" 조회가 안 되고 항상 호출 시점 기준이다. 대신 집계 기간(1w/1mo/3mo/6mo/1y)을 지원하므로
+/// 백테스트 시작일까지 거슬러 올라가는 기간의 거래대금·거래량·상승률 상위 종목을 모아 대상 풀을 넓힌다.
 /// 호출 한도는 TossRestClient 의 시세 그룹 제한을 따른다. CachedHistoryProvider 로 감싸서 쓰는 것을 권장.
 /// </summary>
 public sealed class TossHistoryProvider : IHistoryProvider
 {
     private readonly TossMarketDataSource _source;
+    private readonly DateOnly? _periodFrom;
 
-    public TossHistoryProvider(TossMarketDataSource source) => _source = source;
+    /// <param name="periodFrom">백테스트 시작일. 주면 그날까지 덮는 기간 순위도 함께 모은다.</param>
+    public TossHistoryProvider(TossMarketDataSource source, DateOnly? periodFrom = null)
+    {
+        _source = source;
+        _periodFrom = periodFrom;
+    }
 
     public string Name => "토스 과거 데이터";
+
+    /// <summary>백테스트 시작일부터 오늘까지를 덮는 순위 집계 기간들 (짧은 것 + 전체를 덮는 것)</summary>
+    public static IReadOnlyList<string> DurationsFor(DateOnly? from, DateOnly today)
+    {
+        var list = new List<string> { "1d" };
+        if (from is null) return list;
+        var days = today.DayNumber - from.Value.DayNumber;
+        foreach (var (d, limit) in new[] { ("1w", 7), ("1mo", 31), ("3mo", 92), ("6mo", 183), ("1y", 366) })
+        {
+            list.Add(d);
+            if (days <= limit) break;
+        }
+        return list;
+    }
 
     public async Task<IReadOnlyList<StockInfo>> GetUniverseAsync(CancellationToken ct)
     {
         var symbols = new HashSet<string>();
+        // 현재 순위
         foreach (var type in new[] { RankingType.TradingAmount, RankingType.TradingVolume, RankingType.TopGainers })
             foreach (var e in await _source.GetRankingsAsync(type, 100, ct).ConfigureAwait(false))
                 symbols.Add(e.Symbol);
+        // 기간 순위 (집계되지 않은 조합·미지원 조합은 건너뜀)
+        foreach (var duration in DurationsFor(_periodFrom, Kst.DateOf(Kst.Now)))
+            foreach (var type in new[] { "MARKET_TRADING_AMOUNT", "MARKET_TRADING_VOLUME", "TOP_GAINERS" })
+            {
+                try
+                {
+                    foreach (var e in await _source.GetRankingsRawAsync(type, duration, 100, ct).ConfigureAwait(false))
+                        symbols.Add(e.Symbol);
+                }
+                catch (TossApiException) { }
+            }
         return symbols.Count == 0 ? Array.Empty<StockInfo>() : await _source.GetStocksAsync(symbols.ToList(), ct).ConfigureAwait(false);
     }
 

@@ -138,7 +138,7 @@ public sealed class BacktestViewModel : ViewModelBase
             if (Source == "toss")
             {
                 conn = new TossConnection(EngineHost.ToTossOptions(_settings));
-                provider = new CachedHistoryProvider(new TossHistoryProvider(conn.Source), HistoryCacheDirectory);
+                provider = new CachedHistoryProvider(new TossHistoryProvider(conn.Source, from), HistoryCacheDirectory);
             }
             else
             {
