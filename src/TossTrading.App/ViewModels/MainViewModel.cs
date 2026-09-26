@@ -43,6 +43,7 @@ public sealed class MainViewModel : ViewModelBase
         KillSwitchCommand = new AsyncCommand(KillSwitchAsync);
         ResetKillSwitchCommand = new AsyncCommand(() => Engine is null ? Task.CompletedTask : Run(() => Engine.ResetKillSwitchAsync()));
         OpenSettingsCommand = new AsyncCommand(OpenSettingsAsync);
+        OpenAnalysisCommand = new DelegateCommand(OpenAnalysis);
         SaveAsPresetCommand = new DelegateCommand(SaveAsPreset);
 
         _timer = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromMilliseconds(300) };
@@ -155,6 +156,7 @@ public sealed class MainViewModel : ViewModelBase
 
     // ---------------------------------------------------------------- 명령
     public AsyncCommand StartCommand { get; }
+    public DelegateCommand OpenAnalysisCommand { get; }
     public AsyncCommand StopCommand { get; }
     public AsyncCommand AddSelectedCandidateCommand { get; }
     public AsyncCommand AddManualSymbolCommand { get; }
@@ -298,6 +300,14 @@ public sealed class MainViewModel : ViewModelBase
         var r = DXMessageBox.Show("킬스위치: 모든 봇을 정지하고, 미체결을 취소하고, 보유분을 시장가로 청산합니다.\n실행할까요?",
             "킬스위치", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
         if (r == MessageBoxResult.Yes) await Run(() => Engine.KillSwitchAsync());
+    }
+
+    /// <summary>성과 분석 창 (모달이 아니므로 매매 중에도 열어둘 수 있다)</summary>
+    private void OpenAnalysis()
+    {
+        var existing = Application.Current.Windows.OfType<AnalysisWindow>().FirstOrDefault();
+        if (existing is not null) { existing.Activate(); return; }
+        new AnalysisWindow(new AnalysisViewModel()) { Owner = Application.Current.MainWindow }.Show();
     }
 
     private async Task OpenSettingsAsync()

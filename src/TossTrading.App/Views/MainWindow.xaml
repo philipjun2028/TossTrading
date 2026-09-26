@@ -49,6 +49,8 @@
                 </StackPanel>
                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
                     <TextBlock Text="{Binding Clock}" FontSize="15" FontWeight="SemiBold" Margin="10,0" VerticalAlignment="Center" />
+                    <Button Content="📊 성과 분석" Command="{Binding OpenAnalysisCommand}" Margin="3" Padding="12,4"
+                            ToolTip="거래 기록으로 전략·진입조건·청산별 성과와 개선 제안을 봅니다" />
                     <Button Content="⚙ 설정" Command="{Binding OpenSettingsCommand}" Margin="3" Padding="12,4" />
                     <Button Content="킬스위치 해제" Command="{Binding ResetKillSwitchCommand}" Margin="3" Padding="12,4"
                             Visibility="{Binding KillSwitchActive, Converter={StaticResource BoolToVis}}" />

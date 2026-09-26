@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Threading.Channels;
 using TossTrading.Domain;
+using TossTrading.Engine.Analytics;
 using TossTrading.Engine.Infrastructure;
 using TossTrading.Engine.Market;
 using TossTrading.Engine.Paper;
@@ -70,6 +71,7 @@ public sealed class TradingEngine : IBotHost, IAsyncDisposable
     private readonly Channel<Action> _inbox = Channel.CreateUnbounded<Action>(new UnboundedChannelOptions { SingleReader = true });
     private readonly EngineLog _log;
     private readonly TradeJournal _journal;
+    private readonly AnalyticsRecorder _analytics;
     private readonly TickRecorder? _recorder;
     private readonly OrderManager _orders;
     private readonly ScannerService _scanner;
@@ -116,6 +118,7 @@ public sealed class TradingEngine : IBotHost, IAsyncDisposable
         var dir = options.DataDirectory;
         _log = new EngineLog(dir is null ? null : Path.Combine(dir, "logs"), () => _clock.Now);
         _journal = new TradeJournal(dir is null ? null : Path.Combine(dir, "journal"));
+        _analytics = new AnalyticsRecorder(dir is null ? null : Path.Combine(dir, "journal"));
         if (options.RecordTicks && dir is not null) _recorder = new TickRecorder(Path.Combine(dir, "ticks"));
 
         if (options.StateDirectory is not null)
@@ -175,7 +178,7 @@ public sealed class TradingEngine : IBotHost, IAsyncDisposable
     {
         if (_loop is not null && _store is not null)
         {
-            try { await Invoke(() => { SaveState(); return true; }).WaitAsync(TimeSpan.FromSeconds(3)).ConfigureAwait(false); }
+            try { await Invoke(() => { SaveState(); _analytics.FlushIncomplete(_clock.Now); return true; }).WaitAsync(TimeSpan.FromSeconds(3)).ConfigureAwait(false); }
             catch { /* 저장 실패해도 종료는 진행 */ }
         }
         _cts?.Cancel();
@@ -490,13 +493,16 @@ public sealed class TradingEngine : IBotHost, IAsyncDisposable
         {
             _lastSecond = now;
             foreach (var bot in _bots) bot.OnTimer();
+            var followBefore = _analytics.ActiveFollowUps;
+            _analytics.OnTimer(now, sym => _contexts.TryGetValue(sym, out var c) ? c : null);
+            if (_analytics.ActiveFollowUps != followBefore) RecomputeSubscriptions();
 
             var unrealized = _bots.Sum(b => b.UnrealizedNet);
             if (_risk.CheckDailyLimits(unrealized))
             {
                 _log.Write(LogLevel.Error, "리스크", $"일 손실 한도 {_risk.Settings.DailyLossLimitPct}% 도달 → 신규 진입 중지");
                 if (_risk.Settings.FlattenOnDailyLossLimit)
-                    foreach (var b in _bots) b.Flatten("일 손실 한도", emergency: false);
+                    foreach (var b in _bots) b.Flatten("일 손실 한도", emergency: false, ExitKind.RiskLimit);
             }
 
             foreach (var key in _unmatched.Where(kv => now - kv.Value.At > TimeSpan.FromMinutes(2)).Select(kv => kv.Key).ToList())
@@ -626,6 +632,13 @@ public sealed class TradingEngine : IBotHost, IAsyncDisposable
         var books = new HashSet<string>(botSymbols);
         var budget = _options.MaxTopics - trades.Count - books.Count;
 
+        // 청산·신호 이후 가격 추적 중인 종목은 체결만 유지 (분석용)
+        foreach (var s in _analytics.FollowUpSymbols)
+        {
+            if (budget <= 0) break;
+            if (trades.Add(s)) budget--;
+        }
+
         foreach (var c in _candidates.Take(_options.Scanner.LiveSubscribeTop))
         {
             if (budget <= 0) break;
@@ -670,6 +683,7 @@ public sealed class TradingEngine : IBotHost, IAsyncDisposable
     public DateTimeOffset Now => _clock.Now;
     public CostModel Cost => _cost;
     public ExecutionMode Execution => _options.Execution;
+    public DataSourceKind DataSource => _options.DataSource;
     public int MaxOrderErrorsPerBot => _risk.Settings.MaxOrderErrorsPerBot;
 
     public string SubmitOrder(TradingBot bot, OrderSide side, OrderType type, decimal quantity, decimal? price, OrderPriority priority, string reason)
@@ -708,12 +722,23 @@ public sealed class TradingEngine : IBotHost, IAsyncDisposable
         return PositionSizer.Quantity(bot.Settings, equity, entryPrice, stopPrice, buyingPower, _risk.Settings.MaxOrderAmount);
     }
 
-    public void OnTradeClosed(TradingBot bot, ClosedTrade trade)
+    public void OnTradeClosed(TradingBot bot, ClosedTrade trade, TradeAnalysisRecord analysis)
     {
         _closed.Add(trade);
         _journal.Append(trade);
+        _analytics.WriteTrade(analysis);
+        _analytics.StartFollowUp(analysis.TradeId, "exit", bot.Symbol, Now, analysis.AverageExit, analysis.AverageEntry);
         _risk.OnTradeClosed(trade, Now);
+        RecomputeSubscriptions();
     }
+
+    public void OnSignal(TradingBot bot, SignalRecord signal)
+    {
+        _analytics.WriteSignal(signal);
+        if (signal.Decision != "진입") _analytics.StartFollowUp(signal.SignalId, "signal", bot.Symbol, signal.Time, signal.Price, null);
+    }
+
+    public void OnSignalDecision(TradingBot bot, SignalDecisionRecord decision) => _analytics.WriteDecision(decision);
 
     public void Log(LogLevel level, string source, string message) => _log.Write(level, source, message);
 

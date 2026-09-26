@@ -1,20 +1,34 @@
 using System.Text;
 using TossTrading.Domain;
 using TossTrading.Engine;
+using TossTrading.Engine.Analytics;
 using TossTrading.Engine.Paper;
 using TossTrading.Engine.Simulation;
 using TossTrading.Toss;
 
 Console.OutputEncoding = Encoding.UTF8;
+// --data <폴더> / --source sim|toss 옵션은 위치 인수와 분리해서 읽는다
+var dataDir = OptionValue(ref args, "--data");
+var sourceOpt = OptionValue(ref args, "--source");
 var cmd = args.FirstOrDefault()?.ToLowerInvariant();
 
 return cmd switch
 {
     "check" => await CheckAsync(),
     "sim" => await SimAsync(args.Length > 1 ? int.Parse(args[1]) : 60, args.Length > 2 ? double.Parse(args[2]) : 60,
-                            closing: args.Length > 3 && args[3].Equals("closing", StringComparison.OrdinalIgnoreCase)),
+                            closing: args.Length > 3 && args[3].Equals("closing", StringComparison.OrdinalIgnoreCase), dataDir),
+    "report" => Report(args.Length > 1 ? int.Parse(args[1]) : 30, dataDir, sourceOpt),
     _ => Usage(),
 };
+
+static string? OptionValue(ref string[] args, string name)
+{
+    var i = Array.FindIndex(args, a => a.Equals(name, StringComparison.OrdinalIgnoreCase));
+    if (i < 0 || i + 1 >= args.Length) return null;
+    var value = args[i + 1];
+    args = args.Where((_, k) => k != i && k != i + 1).ToArray();
+    return value;
+}
 
 static int Usage()
 {
@@ -26,6 +40,10 @@ static int Usage()
           sim [초] [배속] [closing]
                              시뮬레이션 시장 + 모의 체결로 엔진을 헤드리스 실행 (기본 60초, 60배속)
                              closing: 14:40 부터 시작해 종가베팅 봇으로 실행
+                             --data <폴더> 를 주면 로그·분석 기록(journal)을 그 폴더에 저장
+          report [일수]      최근 N일(기본 30) 분석 기록으로 성과 리포트 + 개선 제안 생성
+                             --data <폴더> (기본: %LocalAppData%\TossTrading), --source sim|toss
+                             결과: <폴더>\reports\report_*.md, trades_*.csv, signals_*.csv
         """);
     return 1;
 }
@@ -97,10 +115,37 @@ static async Task<int> CheckAsync()
 // ---------------------------------------------------------------------------------------------
 // 헤드리스 시뮬레이션: 스캐너 상위 종목에 봇을 붙이고 자동매매
 // ---------------------------------------------------------------------------------------------
-static async Task<int> SimAsync(int seconds, double speed, bool closing)
+static int Report(int days, string? dataDir, string? source)
+{
+    dataDir ??= Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "TossTrading");
+    DataSourceKind? src = source?.ToLowerInvariant() switch
+    {
+        "sim" or "simulation" => DataSourceKind.Simulation,
+        "toss" => DataSourceKind.Toss,
+        _ => null,
+    };
+    var filter = ReportFilter.LastDays(days, Kst.DateOf(Kst.Now)) with { DataSource = src };
+    var ds = AnalysisDataSet.Load(Path.Combine(dataDir, "journal"), filter);
+    var report = new PerformanceReport(ds, filter);
+    var md = report.BuildMarkdown();
+    Console.WriteLine(md);
+
+    var outDir = Path.Combine(dataDir, "reports");
+    Directory.CreateDirectory(outDir);
+    var stamp = $"{Kst.Now:yyyyMMdd_HHmmss}";
+    var utf8Bom = new UTF8Encoding(true); // 엑셀에서 한글이 깨지지 않도록 BOM 포함
+    File.WriteAllText(Path.Combine(outDir, $"report_{stamp}.md"), md, utf8Bom);
+    File.WriteAllText(Path.Combine(outDir, $"trades_{stamp}.csv"), PerformanceReport.TradesCsv(ds.Trades), utf8Bom);
+    File.WriteAllText(Path.Combine(outDir, $"signals_{stamp}.csv"), PerformanceReport.SignalsCsv(ds), utf8Bom);
+    Console.WriteLine($"저장: {outDir}");
+    if (ds.BadLines > 0) Console.WriteLine($"(읽지 못한 줄 {ds.BadLines}개)");
+    return 0;
+}
+
+static async Task<int> SimAsync(int seconds, double speed, bool closing, string? dataDir)
 {
     var sim = new SimulatedMarket(new SimulationOptions { Speed = speed, Seed = 42, StartTime = closing ? new TimeOnly(14, 40) : new TimeOnly(9, 0) });
-    var options = new EngineOptions { Execution = ExecutionMode.Paper, DataSource = DataSourceKind.Simulation };
+    var options = new EngineOptions { Execution = ExecutionMode.Paper, DataSource = DataSourceKind.Simulation, DataDirectory = dataDir };
     options.Scanner.PollSeconds = 2;
     var paper = new PaperBroker(10_000_000m, new CostModel(options.Cost), sim);
     await using var engine = new TradingEngine(options, sim, sim, paper, sim);

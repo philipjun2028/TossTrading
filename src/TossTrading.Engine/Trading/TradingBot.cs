@@ -1,4 +1,5 @@
 using TossTrading.Domain;
+using TossTrading.Engine.Analytics;
 using TossTrading.Engine.Market;
 using TossTrading.Engine.Strategies;
 
@@ -10,6 +11,7 @@ public interface IBotHost
     DateTimeOffset Now { get; }
     CostModel Cost { get; }
     ExecutionMode Execution { get; }
+    DataSourceKind DataSource { get; }
     int MaxOrderErrorsPerBot { get; }
 
     /// <summary>주문 제출 → clientOrderId 반환. 결과는 OnFill/OnOrderDone 으로 비동기 통지.</summary>
@@ -21,7 +23,13 @@ public interface IBotHost
     (bool Allowed, string? Reason) CanEnter(TradingBot bot, decimal amount);
     decimal SizeFor(TradingBot bot, decimal entryPrice, decimal stopPrice);
 
-    void OnTradeClosed(TradingBot bot, ClosedTrade trade);
+    void OnTradeClosed(TradingBot bot, ClosedTrade trade, TradeAnalysisRecord analysis);
+
+    /// <summary>진입 신호 발생 (진입 여부와 무관하게 분석용 기록)</summary>
+    void OnSignal(TradingBot bot, SignalRecord signal);
+
+    /// <summary>승인 대기 신호의 승인/거절/만료</summary>
+    void OnSignalDecision(TradingBot bot, SignalDecisionRecord decision);
     void Log(LogLevel level, string source, string message);
 }
 
@@ -32,7 +40,8 @@ public sealed record BotPersistState(
     DateTimeOffset EntryTime, bool PartialTaken, string StopKind,
     decimal RealizedNet, int Entries, int Wins, int Losses,
     decimal TradeBuyQty, decimal TradeBuyValue, decimal TradeSellQty, decimal TradeSellValue, decimal TradeNet, string EntryReason,
-    DateOnly SavedDate);
+    DateOnly SavedDate,
+    TradeTrack? Track = null);
 
 /// <summary>
 /// 종목 1개를 담당하는 봇. 상태 머신 (설계 문서 8.5) + 청산 규칙 (6.2).
@@ -66,6 +75,13 @@ public sealed class TradingBot
     private bool _haltAfterFlat;
     private BotState _stateBeforeSuspend;
     private string _stopKind = "손절";
+
+    // 분석 기록
+    private TradeTrack? _track;
+    private string? _pendingSignalId;
+    private string? _lastSignalDecision;
+    private DateTimeOffset _lastSignalLoggedAt;
+    private string? _lastBlockReason;
 
     // 현재 거래(사이클) 누적
     private decimal _tradeBuyQty, _tradeBuyValue, _tradeSellQty, _tradeSellValue, _tradeNet;
@@ -129,7 +145,7 @@ public sealed class TradingBot
         Quantity, AveragePrice, InitialStop, StopPrice, PeakPrice, EntryTime, PartialTaken, _stopKind,
         RealizedNet, Entries, Wins, Losses,
         _tradeBuyQty, _tradeBuyValue, _tradeSellQty, _tradeSellValue, _tradeNet, _entryReason,
-        Kst.DateOf(_host.Now));
+        Kst.DateOf(_host.Now), _track);
 
     /// <summary>
     /// 저장된 상태로 봇을 되살린다. 날짜가 바뀌었으면 당일 통계(실현손익·진입 횟수·승패)는 새로 시작하고,
@@ -154,6 +170,7 @@ public sealed class TradingBot
         bot._tradeSellValue = st.TradeSellValue;
         bot._tradeNet = st.TradeNet;
         bot._entryReason = st.EntryReason;
+        bot._track = st.Track;
 
         var sameDay = st.SavedDate == Kst.DateOf(host.Now);
         if (sameDay)
@@ -213,7 +230,9 @@ public sealed class TradingBot
         var sig = _pendingSignal;
         _pendingSignal = null;
         SetState(BotState.Watching, "승인");
-        return TryEnter(sig, sig.Reason);
+        var entered = TryEnter(sig, sig.Reason);
+        RecordDecision(entered ? "승인→진입" : "승인→차단", entered ? null : _lastBlockReason);
+        return entered;
     }
 
     public void RejectSignal()
@@ -221,10 +240,11 @@ public sealed class TradingBot
         if (State != BotState.SignalPending) return;
         _pendingSignal = null;
         SetState(BotState.Watching, "신호 거절");
+        RecordDecision("거절", null);
     }
 
     /// <summary>보유분 즉시 청산 (수동 청산 / 킬스위치)</summary>
-    public void Flatten(string reason, bool emergency)
+    public void Flatten(string reason, bool emergency, ExitKind kind = ExitKind.Manual)
     {
         CancelEntryOrder();
         _pendingSignal = null;
@@ -238,7 +258,7 @@ public sealed class TradingBot
             if (!_exitOrder.Escalated) EscalateExit(reason);
             return;
         }
-        SubmitExit(Quantity, reason, emergency ? OrderPriority.Emergency : OrderPriority.Exit, market: emergency);
+        SubmitExit(Quantity, reason, emergency ? OrderPriority.Emergency : OrderPriority.Exit, market: emergency, kind);
     }
 
     /// <summary>킬스위치: 미체결 취소 + 보유분 시장가 청산 + 정지</summary>
@@ -247,7 +267,7 @@ public sealed class TradingBot
         _stopAfterFlat = true;
         _pendingSignal = null;
         CancelEntryOrder();
-        if (HasPosition) Flatten("킬스위치", emergency: true);
+        if (HasPosition) Flatten("킬스위치", emergency: true, ExitKind.KillSwitch);
         else if (_entryOrder is null) SetState(BotState.Stopped, "킬스위치");
     }
 
@@ -303,6 +323,7 @@ public sealed class TradingBot
     public void OnMarket(SignalTrigger trigger)
     {
         var now = _host.Now;
+        if (HasPosition && (!Settings.HoldOvernight || InContinuousSession(now))) _track?.Observe(Context.LastPrice);
         switch (State)
         {
             case BotState.Watching:
@@ -345,8 +366,10 @@ public sealed class TradingBot
             case BotState.SignalPending when _pendingSignal is not null:
                 if ((now - _pendingSignal.At).TotalSeconds > 60 || Context.LastPrice > _pendingSignal.TriggerPrice * 1.01m)
                 {
+                    var expiredByPrice = Context.LastPrice > _pendingSignal.TriggerPrice * 1.01m;
                     _pendingSignal = null;
                     SetState(BotState.Watching, "신호 만료");
+                    RecordDecision("만료", expiredByPrice ? "가격 이탈(+1%)" : "60초 경과");
                 }
                 break;
             case BotState.Cooldown when now >= _cooldownUntil:
@@ -373,6 +396,7 @@ public sealed class TradingBot
             if (first)
             {
                 EntryTime = now;
+                if (_track is not null) { _track.MaxPrice = price; _track.MinPrice = price; }
                 InitialStop = Math.Min(_plannedStop, TickRules.AddTicks(AveragePrice, -1, Context.Market));
                 StopPrice = InitialStop;
                 _stopKind = "손절";
@@ -391,6 +415,8 @@ public sealed class TradingBot
             _tradeSellValue += price * sellQty;
             Quantity -= sellQty;
             if (_exitOrder?.ClientOrderId == clientOrderId) _exitOrder.Filled += qty;
+            if (_track is not null && sellQty > 0)
+                _track.Exits.Add(new ExitLeg(now, sellQty, price, _track.PendingExitTrigger, _track.PendingExitKind, _exitReason));
             _host.Log(LogLevel.Trade, Id, $"매도 체결 {sellQty:N0}주 @ {price:N0} 순손익 {net:+#,0;-#,0;0} ({_exitReason})");
             if (Quantity <= 0) CloseTrade(now);
         }
@@ -429,18 +455,20 @@ public sealed class TradingBot
     {
         var sig = _signal?.Evaluate(Context, now, Settings, trigger);
         if (sig is null) return;
-        if (!EntryWindowOpen(now)) return;
-        if (Entries >= Settings.MaxEntries || _stopAfterFlat || _haltAfterFlat) return;
+        if (!EntryWindowOpen(now)) { RecordSignal(sig, "시간외", $"진입 가능 시간 {Settings.EntryStartTime:HH\\:mm}~{Settings.EntryEndTime:HH\\:mm} 밖"); return; }
+        if (Entries >= Settings.MaxEntries || _stopAfterFlat || _haltAfterFlat) { RecordSignal(sig, "진입불가", Entries >= Settings.MaxEntries ? "최대 진입 횟수" : "정지 예정"); return; }
 
         if (Settings.Mode == BotMode.SemiAuto)
         {
             _pendingSignal = sig;
             SetState(BotState.SignalPending, sig.Reason);
             _host.Log(LogLevel.Info, Id, $"진입 신호 (승인 필요): {sig.Reason}");
+            _pendingSignalId = RecordSignal(sig, "승인대기", null, force: true);
         }
         else
         {
-            TryEnter(sig, sig.Reason);
+            var entered = TryEnter(sig, sig.Reason);
+            RecordSignal(sig, entered ? "진입" : "차단", entered ? null : _lastBlockReason, force: entered);
         }
     }
 
@@ -466,10 +494,11 @@ public sealed class TradingBot
 
     private bool TryEnter(EntrySignal? sig, string reason)
     {
-        if (HasWorkingOrders) { _host.Log(LogLevel.Warn, Id, "미체결 주문이 있어 진입 보류"); return false; }
-        if (Entries >= Settings.MaxEntries) { _host.Log(LogLevel.Warn, Id, "최대 진입 횟수 도달"); return false; }
-        if (Context.LastPrice <= 0) { _host.Log(LogLevel.Warn, Id, "시세 없음 — 진입 불가"); return false; }
-        if (Kst.TimeOf(_host.Now) >= LastEntryTime) { _host.Log(LogLevel.Warn, Id, $"{LastEntryTime:HH\\:mm} 이후 — 진입 불가"); return false; }
+        _lastBlockReason = null;
+        if (HasWorkingOrders) return Block("미체결 주문이 있어 진입 보류");
+        if (Entries >= Settings.MaxEntries) return Block("최대 진입 횟수 도달");
+        if (Context.LastPrice <= 0) return Block("시세 없음 — 진입 불가");
+        if (Kst.TimeOf(_host.Now) >= LastEntryTime) return Block($"{LastEntryTime:HH\\:mm} 이후 — 진입 불가");
 
         var ask = Context.OrderBook?.BestAsk ?? Context.LastPrice;
         var limit = TickRules.AddTicks(ask, Settings.EntrySlippageTicks, Context.Market);
@@ -484,20 +513,59 @@ public sealed class TradingBot
         }
 
         var qty = _host.SizeFor(this, limit, stop);
-        if (qty <= 0) { _host.Log(LogLevel.Warn, Id, "매수 가능 수량 0 (투입금/리스크/예수금 확인)"); return false; }
+        if (qty <= 0) return Block("매수 가능 수량 0 (투입금/리스크/예수금 확인)");
 
         var (allowed, why) = _host.CanEnter(this, qty * limit);
-        if (!allowed) { _host.Log(LogLevel.Warn, Id, $"리스크 관리로 진입 차단: {why}"); return false; }
+        if (!allowed) return Block($"리스크 관리로 진입 차단: {why}");
 
         _plannedStop = stop;
         _entryReason = reason;
         _tradeBuyQty = _tradeBuyValue = _tradeSellQty = _tradeSellValue = _tradeNet = 0;
+        _track = new TradeTrack
+        {
+            TradeId = $"{Id}-{_host.Now:yyyyMMddHHmmss}",
+            SignalTime = sig?.At ?? _host.Now,
+            SignalPrice = ask, // 결정 시점에 살 수 있던 가격 (체결가와 비교해 슬리피지 계산)
+            EntryLimitPrice = limit,
+            EntryContext = MarketSnapshot.From(Context, _host.Now),
+        };
         Entries++;
         var id = _host.SubmitOrder(this, OrderSide.Buy, OrderType.Limit, qty, limit, OrderPriority.Entry, reason);
         _entryOrder = new WorkingOrder { ClientOrderId = id, Side = OrderSide.Buy, Quantity = qty, SubmittedAt = _host.Now, Reason = reason };
         SetState(BotState.EntryPending, $"{qty:N0}주 @ {limit:N0} (손절 {stop:N0})");
         _host.Log(LogLevel.Info, Id, $"매수 주문 {qty:N0}주 @ {limit:N0}, 손절 {stop:N0} — {reason}");
         return true;
+    }
+
+    private bool Block(string reason)
+    {
+        _lastBlockReason = reason;
+        _host.Log(LogLevel.Warn, Id, reason);
+        return false;
+    }
+
+    /// <summary>
+    /// 신호 기록. 같은 결과가 반복되면(예: 차단 상태에서 매 틱 신호) 60초에 한 번만 남긴다.
+    /// 진입하지 않은 신호는 이후 가격을 추적해 "놓친 기회 / 피한 손실"을 판단할 수 있게 한다.
+    /// </summary>
+    private string? RecordSignal(EntrySignal sig, string decision, string? detail, bool force = false)
+    {
+        var now = _host.Now;
+        if (!force && decision == _lastSignalDecision && now - _lastSignalLoggedAt < TimeSpan.FromSeconds(60)) return null;
+        _lastSignalDecision = decision;
+        _lastSignalLoggedAt = now;
+        var id = $"{Id}-S{now:yyyyMMddHHmmss}";
+        _host.OnSignal(this, new SignalRecord(
+            id, Id, Symbol, Context.Name, EntrySignalFactory.DisplayName(Settings.Strategy), Settings.Mode, _host.Execution, _host.DataSource,
+            now, Context.LastPrice, sig.StructuralStop, sig.Reason, decision, detail, MarketSnapshot.From(Context, now)));
+        return id;
+    }
+
+    private void RecordDecision(string decision, string? detail)
+    {
+        if (_pendingSignalId is null) return;
+        _host.OnSignalDecision(this, new SignalDecisionRecord(_pendingSignalId, _host.Now, decision, detail));
+        _pendingSignalId = null;
     }
 
     private void EvaluateExit(DateTimeOffset now)
@@ -518,12 +586,13 @@ public sealed class TradingBot
             }
             // 장 시작 전 데이터(전일 종가)가 아니라 오늘 체결가로 판단해야 한다
             if (IsCarriedOver && Kst.DateOf(Context.LastTradeTime) < Kst.DateOf(now)) return;
+            _track?.Observe(p);
             // 진입 당일: 익일 갭을 노리는 전략이므로 손절만 적용 (익절·트레일링·본절은 익일부터)
             if (!IsCarriedOver)
             {
                 var entryDayStop = StopPrice ?? InitialStop;
                 if (_exitOrder is null && p <= entryDayStop)
-                    SubmitExit(Quantity, $"손절 ({entryDayStop:N0})", OrderPriority.Emergency, market: false);
+                    SubmitExit(Quantity, $"손절 ({entryDayStop:N0})", OrderPriority.Emergency, market: false, ExitKind.StopLoss, entryDayStop);
                 else if (_exitOrder is null && State == BotState.InPosition)
                     StateReason = "종가 보유 중 — 당일은 손절만 적용";
                 return;
@@ -532,17 +601,18 @@ public sealed class TradingBot
             {
                 if (Settings.NextDayExitMode == NextDayExitMode.AtOpen)
                 {
-                    SubmitExit(Quantity, "익일 시초 매도", OrderPriority.Exit, market: true);
+                    SubmitExit(Quantity, "익일 시초 매도", OrderPriority.Exit, market: true, ExitKind.NextDayOpen);
                     return;
                 }
                 if (Kst.TimeOf(now) >= Settings.NextDayExitTime)
                 {
-                    SubmitExit(Quantity, $"익일 청산 시각 {Settings.NextDayExitTime:HH\\:mm}", OrderPriority.Exit, market: false);
+                    SubmitExit(Quantity, $"익일 청산 시각 {Settings.NextDayExitTime:HH\\:mm}", OrderPriority.Exit, market: false, ExitKind.NextDayDeadline);
                     return;
                 }
             }
         }
 
+        if (!Settings.HoldOvernight) _track?.Observe(p);
         if (p > PeakPrice) PeakPrice = p;
 
         var stop = StopPrice ?? InitialStop;
@@ -565,12 +635,13 @@ public sealed class TradingBot
         var sellable = Quantity;
         if (p <= stop)
         {
-            SubmitExit(sellable, $"{stopKind} ({stop:N0})", OrderPriority.Emergency, market: false);
+            var kind = stopKind switch { "본절" => ExitKind.BreakEven, "트레일링" => ExitKind.Trailing, _ => ExitKind.StopLoss };
+            SubmitExit(sellable, $"{stopKind} ({stop:N0})", OrderPriority.Emergency, market: false, kind, stop);
             return;
         }
         if (Settings.TakeProfitPct > 0 && p >= AveragePrice * (1 + Settings.TakeProfitPct / 100m))
         {
-            SubmitExit(sellable, $"목표 익절 +{Settings.TakeProfitPct}%", OrderPriority.Exit, market: false);
+            SubmitExit(sellable, $"목표 익절 +{Settings.TakeProfitPct}%", OrderPriority.Exit, market: false, ExitKind.TakeProfit);
             return;
         }
         if (!PartialTaken && Settings.PartialTakeProfitPct > 0 && p >= AveragePrice * (1 + Settings.PartialTakeProfitPct / 100m))
@@ -579,7 +650,7 @@ public sealed class TradingBot
             PartialTaken = true;
             if (part >= 1 && part < Quantity)
             {
-                SubmitExit(part, $"1차 분할 익절 +{Settings.PartialTakeProfitPct}%", OrderPriority.Exit, market: false);
+                SubmitExit(part, $"1차 분할 익절 +{Settings.PartialTakeProfitPct}%", OrderPriority.Exit, market: false, ExitKind.PartialTakeProfit);
                 return;
             }
         }
@@ -588,20 +659,25 @@ public sealed class TradingBot
         if (Settings.TimeStopMinutes > 0 && (now - EntryTime).TotalMinutes >= Settings.TimeStopMinutes
             && PeakPrice < AveragePrice + R * Settings.TimeStopMinProgressR)
         {
-            SubmitExit(sellable, $"타임스탑 {Settings.TimeStopMinutes}분", OrderPriority.Exit, market: false);
+            SubmitExit(sellable, $"타임스탑 {Settings.TimeStopMinutes}분", OrderPriority.Exit, market: false, ExitKind.TimeStop);
             return;
         }
         if (Kst.TimeOf(now) >= Settings.ForceExitTime)
         {
-            SubmitExit(sellable, "장마감 강제청산", OrderPriority.Exit, market: false);
+            SubmitExit(sellable, "장마감 강제청산", OrderPriority.Exit, market: false, ExitKind.ForceClose);
         }
     }
 
-    private void SubmitExit(decimal qty, string reason, OrderPriority priority, bool market)
+    private void SubmitExit(decimal qty, string reason, OrderPriority priority, bool market, ExitKind kind = ExitKind.Other, decimal? triggerPrice = null)
     {
         if (qty <= 0 || _exitOrder is not null) return;
         CancelEntryOrder();
         _exitReason = reason;
+        if (_track is not null)
+        {
+            _track.PendingExitKind = kind;
+            _track.PendingExitTrigger = triggerPrice ?? Context.LastPrice;
+        }
         decimal? price = null;
         var type = OrderType.Market;
         if (!market)
@@ -646,13 +722,15 @@ public sealed class TradingBot
             riskPerShare > 0 && _tradeSellQty > 0 ? _tradeNet / (riskPerShare * _tradeSellQty) : null,
             _entryReason, _exitReason);
 
+        var analysis = BuildAnalysis(now, avgEntry, avgExit);
         RealizedNet += _tradeNet;
         if (_tradeNet > 0) Wins++; else Losses++;
         Quantity = 0;
         AveragePrice = 0;
         StopPrice = null;
         PartialTaken = false;
-        _host.OnTradeClosed(this, trade);
+        _track = null;
+        _host.OnTradeClosed(this, trade, analysis);
         _host.Log(LogLevel.Trade, Id, $"거래 종료 순손익 {_tradeNet:+#,0;-#,0;0} ({trade.NetPct:F2}%), 봇 누적 {RealizedNet:+#,0;-#,0;0}");
 
         // 봇 레벨 목표/한도 (설계 문서 2.1 "목표 도달 시 정지" 3단계 중 ②)
@@ -668,6 +746,37 @@ public sealed class TradingBot
 
         _cooldownUntil = now.AddSeconds(Settings.CooldownSeconds);
         SetState(Settings.CooldownSeconds > 0 ? BotState.Cooldown : BotState.Watching, "청산 완료");
+    }
+
+    private TradeAnalysisRecord BuildAnalysis(DateTimeOffset now, decimal avgEntry, decimal avgExit)
+    {
+        var t = _track ?? new TradeTrack { TradeId = $"{Id}-{EntryTime:yyyyMMddHHmmss}", SignalTime = EntryTime, SignalPrice = avgEntry, EntryLimitPrice = avgEntry };
+        var qty = _tradeSellQty;
+        var gross = _tradeSellValue - avgEntry * qty;
+        decimal Pct(decimal price) => avgEntry > 0 && price > 0 ? Math.Round((price / avgEntry - 1m) * 100m, 3) : 0;
+
+        decimal? exitSlip = null;
+        var legs = t.Exits.Where(l => l.TriggerPrice > 0).ToList();
+        var legQty = legs.Sum(l => l.Quantity);
+        if (legQty > 0) exitSlip = Math.Round(legs.Sum(l => (l.Price / l.TriggerPrice - 1m) * 100m * l.Quantity) / legQty, 3);
+
+        var finalKind = t.Exits.Count > 0 ? t.Exits[^1].Kind : ExitKind.Other;
+        if (finalKind == ExitKind.PartialTakeProfit && t.Exits.Count > 1) finalKind = t.Exits.Last(l => l.Kind != ExitKind.PartialTakeProfit).Kind;
+        var riskPerShare = avgEntry - InitialStop;
+
+        return new TradeAnalysisRecord(
+            t.TradeId, Id, Symbol, Context.Name, EntrySignalFactory.DisplayName(Settings.Strategy),
+            Settings.Mode, _host.Execution, _host.DataSource,
+            t.SignalTime, t.SignalPrice, t.EntryLimitPrice, EntryTime, Math.Round(avgEntry, 2), qty,
+            InitialStop, avgEntry > 0 ? Math.Round(riskPerShare / avgEntry * 100m, 3) : 0, _entryReason, t.EntryContext,
+            now, Math.Round(avgExit, 2), t.Exits.ToList(), finalKind,
+            Math.Round(gross, 0), Math.Round(gross - _tradeNet, 0), Math.Round(_tradeNet, 0),
+            avgEntry > 0 && qty > 0 ? Math.Round(_tradeNet / (avgEntry * qty) * 100m, 3) : 0,
+            riskPerShare > 0 && qty > 0 ? Math.Round(_tradeNet / (riskPerShare * qty), 2) : null,
+            Math.Max(0, Pct(t.MaxPrice)), Math.Min(0, Pct(t.MinPrice)),
+            t.SignalPrice > 0 ? Math.Round((avgEntry / t.SignalPrice - 1m) * 100m, 3) : 0, exitSlip,
+            Math.Round((now - EntryTime).TotalMinutes, 1), Kst.DateOf(now) > Kst.DateOf(EntryTime),
+            Settings.Clone(), MarketSnapshot.From(Context, now));
     }
 
     private void RegisterError(string message)

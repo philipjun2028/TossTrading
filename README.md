@@ -76,6 +76,8 @@ tests/TossTrading.Tests/ xUnit 56개 (도메인·봇·페이퍼·엔진 통합·
 
 데이터 폴더: `%LocalAppData%\TossTrading\` (settings.json, logs, journal(거래기록 jsonl), ticks(체결/호가 기록))
 
+**성과 분석**: 모든 거래·신호가 분석용으로 `journal\analysis_*.jsonl` 에 기록됩니다 (진입 시 시장 상황, 보유 중 최고/최저, 슬리피지, 청산 후 60분 흐름, 당시 설정). 앱의 [📊 성과 분석] 또는 `TossTrading.Cli report [일수]` 로 전략·조건별 성과와 개선 제안을 볼 수 있습니다 → [구현 노트 7장](docs/02_Implementation_Notes.md)
+
 ## 문서
 
 - [01. 컨셉 & 설계](docs/01_Concept_and_Design.md)

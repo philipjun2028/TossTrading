@@ -1,5 +1,6 @@
 using TossTrading.Domain;
 using TossTrading.Engine;
+using TossTrading.Engine.Analytics;
 using TossTrading.Engine.Market;
 using TossTrading.Engine.Paper;
 using TossTrading.Engine.Simulation;
@@ -142,6 +143,10 @@ internal sealed class FakeHost : IBotHost
     public DateTimeOffset Now => Clock.Now;
     public CostModel Cost { get; } = new(new CostSettings());
     public ExecutionMode Execution => ExecutionMode.Paper;
+    public DataSourceKind DataSource => DataSourceKind.Simulation;
+    public readonly List<TradeAnalysisRecord> Analyses = new();
+    public readonly List<SignalRecord> Signals = new();
+    public readonly List<SignalDecisionRecord> Decisions = new();
     public int MaxOrderErrorsPerBot => 3;
     public bool AllowEntry { get; set; } = true;
     public decimal SizeResult { get; set; } = 100;
@@ -157,7 +162,9 @@ internal sealed class FakeHost : IBotHost
     public void CancelOrder(TradingBot bot, string clientOrderId) => Cancels.Add(clientOrderId);
     public (bool Allowed, string? Reason) CanEnter(TradingBot bot, decimal amount) => (AllowEntry, AllowEntry ? null : "blocked");
     public decimal SizeFor(TradingBot bot, decimal entryPrice, decimal stopPrice) => SizeResult;
-    public void OnTradeClosed(TradingBot bot, ClosedTrade trade) => Trades.Add(trade);
+    public void OnTradeClosed(TradingBot bot, ClosedTrade trade, TradeAnalysisRecord analysis) { Trades.Add(trade); Analyses.Add(analysis); }
+    public void OnSignal(TradingBot bot, SignalRecord signal) => Signals.Add(signal);
+    public void OnSignalDecision(TradingBot bot, SignalDecisionRecord decision) => Decisions.Add(decision);
     public void Log(LogLevel level, string source, string message) { }
 }
 
