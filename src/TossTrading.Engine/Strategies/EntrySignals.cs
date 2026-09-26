@@ -6,7 +6,8 @@ namespace TossTrading.Engine.Strategies;
 public enum SignalTrigger { Trade, BarClosed }
 
 /// <summary>진입 신호. StructuralStop 은 전략이 제안하는 손절가 (없으면 % 손절 사용).</summary>
-public sealed record EntrySignal(decimal TriggerPrice, decimal? StructuralStop, string Reason, DateTimeOffset At);
+/// <param name="SizeMultiplier">확신 등급에 따른 수량 배수 (1 = 기본, A등급이면 설정의 ConvictionMultiplier)</param>
+public sealed record EntrySignal(decimal TriggerPrice, decimal? StructuralStop, string Reason, DateTimeOffset At, decimal SizeMultiplier = 1m);
 
 /// <summary>진입 전략 플러그인 (설계 문서 6.1). 전략 인스턴스는 봇 1개 전용이며 상태를 가질 수 있다.</summary>
 public interface IEntrySignal
@@ -23,6 +24,7 @@ public static class EntrySignalFactory
         EntryStrategyKind.VwapReclaim => new VwapReclaimSignal(),
         EntryStrategyKind.HighBreakout => new HighBreakoutSignal(),
         EntryStrategyKind.ClosingBet => new ClosingBetSignal(),
+        EntryStrategyKind.OvernightBasket => new OvernightBasketSignal(),
         _ => null,
     };
 
@@ -33,6 +35,7 @@ public static class EntrySignalFactory
         EntryStrategyKind.VwapReclaim => "VWAP눌림",
         EntryStrategyKind.HighBreakout => "고가돌파",
         EntryStrategyKind.ClosingBet => "종가베팅",
+        EntryStrategyKind.OvernightBasket => "오버나잇",
         _ => kind.ToString(),
     };
 }
@@ -77,7 +80,14 @@ public sealed class OpeningRangeBreakoutSignal : IEntrySignal
         if (curStart >= rangeEnd && maxBeforeInBar > hi) { _brokenOn = today; return null; }
         if (price < ctx.Vwap) return null;
         var rangePct = lo > 0 ? (hi - lo) / lo * 100m : 0;
-        if (rangePct > 10m) return null;                    // 범위가 너무 넓으면 손익비 불리
+        if (rangePct > s.OrbMaxRangePct) return null;       // 범위가 너무 넓으면 돌파 후 밀림이 잦음
+
+        // 등락률·갭 필터 (2026-01~09 연구: +3~10% 에서 돌파한 종목만 꾸준히 우위, 갭 10% 초과는 손실)
+        if (ctx.PreviousClose is not > 0) return null;
+        var changePct = (price / ctx.PreviousClose.Value - 1m) * 100m;
+        if (changePct < s.OrbMinChangePct || changePct > s.OrbMaxChangePct) return null;
+        var gapPct = ctx.DayOpen > 0 ? (ctx.DayOpen / ctx.PreviousClose.Value - 1m) * 100m : 0;
+        if (gapPct > s.OrbMaxGapPct) return null;
 
         var avgVol = ctx.AverageBarVolume(10);
         var curVol = ctx.CurrentBar?.Volume ?? 0;
@@ -85,8 +95,12 @@ public sealed class OpeningRangeBreakoutSignal : IEntrySignal
         if (avgVol > 0 && curVol / Math.Min(elapsed, 1m) < avgVol * 1.2m) return null; // 거래량 동반
 
         _brokenOn = today;
+        // A등급: 범위 2~4%, 등락 +8% 이하, 장 시작 15분 안 돌파 (상·하반기 모두 거래당 +1.4% 이상)
+        var minutes = (Kst.TimeOf(now) - Kst.MarketOpen).TotalMinutes;
+        var gradeA = rangePct is >= 2m and <= 4m && changePct <= 8m && minutes <= 15;
+        var mult = gradeA && s.ConvictionSizing ? s.ConvictionMultiplier : 1m;
         return new EntrySignal(price, TickRules.AddTicks(lo, -1, ctx.Market),
-            $"ORB{s.OrbMinutes} 고가 {hi:N0} 돌파 (범위 {rangePct:F1}%)", now);
+            $"ORB{s.OrbMinutes} 고가 {hi:N0} 돌파 (범위 {rangePct:F1}%, 등락 {changePct:+0.0}%){(gradeA ? " · A등급" : "")}", now, mult);
     }
 }
 
@@ -205,5 +219,31 @@ public sealed class ClosingBetSignal : IEntrySignal
         _firedDate = today;
         return new EntrySignal(price, null,
             $"종가베팅: 등락 {changePct:+0.0}%, 고저범위 {pos:P0} 위치, VWAP {ctx.Vwap:N0} 위", now);
+    }
+}
+
+/// <summary>
+/// 오버나잇 바스켓: 진입 시간(기본 15:10~15:19)에 한 번 매수. 종목 선정은 자동 운용이 거래대금 순으로 한다.
+/// 여기서는 매수하면 안 되는 경우만 거른다: 상한가 부근(체결이 어렵고 불리), 급등 후 저가권으로 밀린 종목.
+/// </summary>
+public sealed class OvernightBasketSignal : IEntrySignal
+{
+    private DateOnly _firedDate;
+
+    public string Name => "오버나잇";
+
+    public EntrySignal? Evaluate(SymbolContext ctx, DateTimeOffset now, BotSettings s, SignalTrigger trigger)
+    {
+        var today = Kst.DateOf(now);
+        if (_firedDate == today) return null;
+        var t = Kst.TimeOf(now);
+        if (t < s.EntryStartTime || t >= s.EntryEndTime || t >= BotSettings.MarketCloseAuction) return null;
+        var price = ctx.LastPrice;
+        if (price <= 0 || ctx.ChangeRate is not { } change) return null;
+        if (ctx.Limits?.Upper is { } upper && price >= upper * 0.985m) return null;       // 상한가 부근
+        if (change * 100m >= 28m) return null;
+        if (change * 100m > 8m && ctx.RangePosition is < 0.3m) return null;               // 급등 후 밀림
+        _firedDate = today;
+        return new EntrySignal(price, null, $"오버나잇: 등락 {change * 100m:+0.0}%, 범위 위치 {ctx.RangePosition:P0}", now);
     }
 }

@@ -333,7 +333,7 @@ public class ClosingScannerTests
     {
         var sim = new SimulatedMarket(new SimulationOptions { Seed = 42, ManualClock = true, StartTime = new TimeOnly(9, 0) });
         sim.AdvanceTo(Kst.At(Kst.DateOf(sim.Now), new TimeOnly(15, 0)));
-        var settings = new ScannerSettings { Mode = ScanMode.ClosingBet, ClosingBarsPerCycle = 5 };
+        var settings = new ScannerSettings { Mode = ScanMode.ClosingBet, ClosingBarsPerCycle = 5, ClosingMinChangePct = 3m, ClosingMaxChangePct = 20m };
         var scanner = new TossTrading.Engine.Scanning.ScannerService(sim, sim, settings, _ => null, _ => { }, (_, _) => { });
 
         IReadOnlyList<ScanCandidate> result = Array.Empty<ScanCandidate>();

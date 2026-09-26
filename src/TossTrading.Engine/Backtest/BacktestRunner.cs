@@ -216,8 +216,19 @@ public sealed class BacktestRunner
                 }
                 else if (held.Any(h => !minute.ContainsKey(h)))
                 {
-                    note = "보유 종목 분봉 없음";
-                    Warn($"{date:yyyy-MM-dd}: 보유 종목 {string.Join(",", held.Where(h => !minute.ContainsKey(h)))} 분봉 없음 → 그날 매도 불가");
+                    // 보유 종목 분봉이 없으면 일봉으로 하루 경로를 만들어 매도할 수 있게 한다 (시가 매도는 정확히 시가)
+                    var filled = new List<string>();
+                    foreach (var h in held.Where(h => !minute.ContainsKey(h)))
+                    {
+                        var bar = daily.TryGetValue(h, out var dl) ? dl.FirstOrDefault(b => Kst.DateOf(b.Start) == date) : null;
+                        if (bar is null) continue;
+                        minute[h] = DailyToMinutes(date, bar);
+                        filled.Add(h);
+                    }
+                    var missing = held.Where(h => !minute.ContainsKey(h)).ToList();
+                    note = missing.Count > 0 ? "보유 종목 분봉 없음" : "보유 종목 일봉 대체";
+                    if (filled.Count > 0) Warn($"{date:yyyy-MM-dd}: 보유 종목 {string.Join(",", filled)} 분봉 없음 → 일봉(시가·고가·저가·종가)으로 대체");
+                    if (missing.Count > 0) Warn($"{date:yyyy-MM-dd}: 보유 종목 {string.Join(",", missing)} 분봉·일봉 없음 → 그날 매도 불가");
                 }
 
                 var dailyBefore = daily.ToDictionary(kv => kv.Key,
@@ -363,6 +374,36 @@ public sealed class BacktestRunner
                 File.AppendAllLines(Path.Combine(_o.OutputDirectory, "trade_bars.jsonl"), lines, new System.Text.UTF8Encoding(false));
         }
         catch (IOException) { /* 진단 기록 실패는 무시 */ }
+    }
+
+    /// <summary>
+    /// 일봉 하나를 1분봉 경로로 근사: 09:00 시가 → (시가에서 가까운 극값) → 다른 극값 → 15:30 종가.
+    /// 분봉이 없는 보유 종목을 매도하기 위한 대체용이라 시가 매도는 정확하고, 장중 청산은 근사다.
+    /// </summary>
+    public static IReadOnlyList<Bar> DailyToMinutes(DateOnly date, Bar d)
+    {
+        var highFirst = d.High - d.Open < d.Open - d.Low;
+        var (p1, p2) = highFirst ? (d.High, d.Low) : (d.Low, d.High);
+        (int Min, decimal Price)[] knots = { (0, d.Open), (60, p1), (240, p2), (390, d.Close) };
+        var bars = new List<Bar>();
+        var vol = Math.Max(1m, Math.Floor(d.Volume / 391m));
+        var prev = d.Open;
+        for (var m = 0; m <= 390; m++)
+        {
+            var k = Array.FindLastIndex(knots, x => x.Min <= m);
+            var (m0, v0) = knots[k];
+            var (m1, v1) = knots[Math.Min(k + 1, knots.Length - 1)];
+            var raw = m1 == m0 ? v0 : v0 + (v1 - v0) * (m - m0) / (m1 - m0);
+            var price = m == 0 ? d.Open : TickRules.RoundDown(raw);
+            bars.Add(new Bar
+            {
+                Start = Kst.At(date, Kst.MarketOpen).AddMinutes(m), Open = prev, Close = price,
+                High = Math.Max(prev, price), Low = Math.Min(prev, price), Volume = vol, Value = price * vol,
+            });
+            prev = price;
+        }
+        bars[0].Open = d.Open; bars[0].High = Math.Max(bars[0].High, d.Open); bars[0].Low = Math.Min(bars[0].Low, d.Open);
+        return bars;
     }
 
     private static async Task StepAsync(TradingEngine engine, ReplayMarket replay, DateTimeOffset t)

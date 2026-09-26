@@ -518,6 +518,12 @@ public sealed class TradingBot
         }
 
         var qty = _host.SizeFor(this, limit, stop);
+        if (qty > 0 && sig is { SizeMultiplier: > 1m } && Settings.ConvictionSizing)
+        {
+            // 확신 등급: 수량을 늘리되 (최대 투입금 × 배수) 를 넘지 않게
+            var cap = Math.Floor(Settings.MaxPositionAmount * sig.SizeMultiplier / limit);
+            qty = Math.Min(Math.Floor(qty * sig.SizeMultiplier), cap);
+        }
         if (qty <= 0) return Block("매수 가능 수량 0 (투입금/리스크/예수금 확인)");
 
         var (allowed, why) = _host.CanEnter(this, qty * limit);

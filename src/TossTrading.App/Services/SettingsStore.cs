@@ -119,7 +119,7 @@ public static class SettingsStore
     /// <summary>
     /// 종목 자동 선정으로 바뀐 뒤: 수동 진입 전용 프리셋은 쓸 곳이 없어 지우고, 나머지는 완전자동으로 맞춘다.
     /// </summary>
-    public const int CurrentVersion = 3;
+    public const int CurrentVersion = 4;
 
     public static void MigratePresets(AppSettings s)
     {
@@ -147,6 +147,33 @@ public static class SettingsStore
             Bump(sc.MaxCandidates, 30, 40, v => sc.MaxCandidates = v);
             Bump(sc.LiveSubscribeTop, 20, 30, v => sc.LiveSubscribeTop = v);
             s.SettingsVersion = 3;
+        }
+        if (s.SettingsVersion < 4)
+        {
+            // v4: 2026-01~09 토스 데이터 연구 반영 — ORB(필터·오후까지 보유) + 오버나잇 바스켓(거래대금 상위, 익일 시가 매도)
+            static void Bump<T>(T current, T oldDefault, T newDefault, Action<T> set) where T : IEquatable<T>
+            {
+                if (current.Equals(oldDefault)) set(newDefault);
+            }
+            var a = s.AutoPilot; var r = s.Risk; var sc = s.Scanner;
+            Bump(a.MorningUntil, new TimeOnly(10, 0), new TimeOnly(9, 30), v => a.MorningUntil = v);
+            Bump(a.DayExitTime, new TimeOnly(14, 50), new TimeOnly(15, 5), v => a.DayExitTime = v);
+            Bump(a.MaxDayBots, 6, 10, v => a.MaxDayBots = v);
+            Bump(a.MinDayScore, 50m, 0m, v => a.MinDayScore = v);
+            Bump(a.ClosingScanTime, new TimeOnly(14, 40), new TimeOnly(14, 50), v => a.ClosingScanTime = v);
+            Bump(a.ClosingSelectTime, new TimeOnly(14, 55), new TimeOnly(15, 5), v => a.ClosingSelectTime = v);
+            Bump(a.MaxClosingBots, 4, 8, v => a.MaxClosingBots = v);
+            if (a.ClosingPreset == "종가베팅 (익일 매도)") a.ClosingPreset = BotPresets.Overnight;
+            Bump(r.DailyLossLimitPct, 2.0m, 3.0m, v => r.DailyLossLimitPct = v);
+            Bump(sc.ClosingMinChangePct, 3m, 0m, v => sc.ClosingMinChangePct = v);
+            Bump(sc.ClosingMaxChangePct, 20m, 29m, v => sc.ClosingMaxChangePct = v);
+            // ORB 프리셋이 이전 기본값(손절 1.5%, 목표 4%)이면 새 기본값으로
+            var defaults = BotPresets.CreateDefaults();
+            if (s.Presets.TryGetValue(BotPresets.Orb, out var orb) && orb.StopLossPct == 1.5m && orb.TakeProfitPct == 4m)
+                s.Presets[BotPresets.Orb] = defaults[BotPresets.Orb];
+            if (s.Presets.TryGetValue("종가베팅 (익일 매도)", out var cb) && cb.NextDayExitMode == NextDayExitMode.Managed)
+                cb.NextDayExitMode = NextDayExitMode.AtOpen; // 연구: 다음 날 장중 보유는 손실, 시가 매도가 유리
+            s.SettingsVersion = 4;
         }
         foreach (var name in s.Presets.Where(kv => kv.Value.Strategy == EntryStrategyKind.Manual).Select(kv => kv.Key).ToList())
             s.Presets.Remove(name);

@@ -197,7 +197,7 @@ public class BacktestRunnerTests
             Assert.True(result.MaxDrawdownPct >= 0);
             Assert.All(result.Trades, t => Assert.True(t.ExitTime >= t.EntryTime));
             // 단타는 당일 청산, 종가베팅만 다음 날로 넘어간다
-            Assert.All(result.Trades.Where(t => t.Strategy != "종가베팅"), t => Assert.Equal(Kst.DateOf(t.EntryTime), Kst.DateOf(t.ExitTime)));
+            Assert.All(result.Trades.Where(t => t.Strategy is not ("종가베팅" or "오버나잇")), t => Assert.Equal(Kst.DateOf(t.EntryTime), Kst.DateOf(t.ExitTime)));
             Assert.All(result.Trades.Where(t => Kst.DateOf(t.EntryTime) == Kst.DateOf(t.ExitTime)),
                 t => Assert.True(Kst.TimeOf(t.ExitTime) <= new TimeOnly(15, 30)));
             Assert.Contains(progress, p => p.Stage == "재생");

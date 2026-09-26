@@ -18,6 +18,20 @@ public sealed class BotSettings
     /// <summary>ORB 시가 범위 (분)</summary>
     public int OrbMinutes { get; set; } = 5;
 
+    /// <summary>ORB 진입 시점 등락률 범위 % (너무 적게 오른 종목·이미 많이 오른 종목 제외)</summary>
+    public decimal OrbMinChangePct { get; set; } = 3m;
+    public decimal OrbMaxChangePct { get; set; } = 10m;
+
+    /// <summary>ORB 시가 갭 상한 % (큰 갭상승은 돌파 후 밀림이 잦음)</summary>
+    public decimal OrbMaxGapPct { get; set; } = 10m;
+
+    /// <summary>ORB 시가 범위(고가/저가) 폭 상한 %</summary>
+    public decimal OrbMaxRangePct { get; set; } = 6m;
+
+    /// <summary>확신 등급 비중: 전략이 A등급으로 판단한 신호는 수량 × ConvictionMultiplier</summary>
+    public bool ConvictionSizing { get; set; } = true;
+    public decimal ConvictionMultiplier { get; set; } = 1.5m;
+
     // ---- 자금 ----
     public SizingMode Sizing { get; set; } = SizingMode.RiskBased;
 
@@ -116,8 +130,9 @@ public sealed class BotSettings
             e.Add("수동진입 모드에서는 전략을 '수동'으로 두세요 (자동 신호는 반자동/완전자동에서 사용).");
         if (Mode != BotMode.ManualEntry && Strategy == EntryStrategyKind.Manual)
             e.Add("반자동/완전자동 모드에는 진입 전략을 선택해야 합니다.");
-        if (Strategy == EntryStrategyKind.ClosingBet && !HoldOvernight)
+        if (Strategy is (EntryStrategyKind.ClosingBet or EntryStrategyKind.OvernightBasket) && !HoldOvernight)
             e.Add("종가매매 전략은 '익일 보유'를 켜야 합니다.");
+        if (ConvictionMultiplier is < 1m or > 3m) e.Add("확신 등급 배수는 1~3 입니다.");
         if (HoldOvernight && EntryEndTime > MarketCloseAuction)
             e.Add("익일 보유 봇은 진입 종료 시각이 15:20 (종가 단일가 시작) 이전이어야 합니다.");
         if (HoldOvernight && (NextDayExitTime <= Kst.MarketOpen || NextDayExitTime > MarketCloseAuction))
@@ -130,7 +145,7 @@ public sealed class BotSettings
 /// <summary>계좌 레벨 리스크 한도 (설계 문서 7.2)</summary>
 public sealed class RiskSettings
 {
-    public decimal DailyLossLimitPct { get; set; } = 2.0m;
+    public decimal DailyLossLimitPct { get; set; } = 3.0m;
 
     /// <summary>일 목표 수익 % (0 = 사용 안 함). 도달 시 신규 진입 중지.</summary>
     public decimal DailyProfitTargetPct { get; set; } = 0m;
@@ -175,8 +190,8 @@ public sealed class ScannerSettings
 
     // ---- 종가매매 모드 ----
     public ScanMode Mode { get; set; } = ScanMode.DayTrading;
-    public decimal ClosingMinChangePct { get; set; } = 3m;
-    public decimal ClosingMaxChangePct { get; set; } = 20m;
+    public decimal ClosingMinChangePct { get; set; } = 0m;
+    public decimal ClosingMaxChangePct { get; set; } = 29m;
 
     /// <summary>당일 고저 범위 내 위치 하한 (0~1)</summary>
     public decimal ClosingMinRangePosition { get; set; } = 0.75m;
@@ -193,11 +208,45 @@ public sealed class ScannerSettings
 /// <summary>자동 운용이 쓰는 봇 설정 묶음 (오전·장중·종가 프리셋). 모두 완전자동.</summary>
 public static class BotPresets
 {
+    /// <summary>자동 운용 오전 단타 (2026-01~09 토스 1분봉 연구 결과)</summary>
+    public const string Orb = "ORB 표준";
+
+    /// <summary>자동 운용 종가 (오버나잇 바스켓)</summary>
+    public const string Overnight = "오버나잇 바스켓";
+
     public static Dictionary<string, BotSettings> CreateDefaults() => new()
     {
-        ["ORB 표준"] = new BotSettings
+        // ORB: 09:05~09:30 첫 돌파, 등락 3~10%·갭 ≤10%·범위 ≤6% 필터, 손절 3%·목표 10%·15:05 청산.
+        // 분할익절·트레일링·본절·타임스탑을 빼고 오후까지 보유한 쪽이 거래당 +1.3% (짧게 끊으면 -0.1%).
+        [Orb] = new BotSettings
         {
             Mode = BotMode.FullAuto, Strategy = EntryStrategyKind.OpeningRangeBreakout,
+            EntryStartTime = new TimeOnly(9, 5), EntryEndTime = new TimeOnly(9, 30),
+            RiskPerTradePct = 0.3m, MaxPositionAmount = 2_000_000m,
+            StopLossPct = 3m, UseStructuralStop = false,
+            PartialTakeProfitPct = 0, TakeProfitPct = 10m, TrailingActivationPct = 0, MoveStopToBreakEven = false,
+            TimeStopMinutes = 0, ForceExitTime = new TimeOnly(15, 5),
+            MaxEntries = 1, BotTargetProfitPct = 0, BotMaxLossPct = 0,
+        },
+        // 오버나잇 바스켓: 15:10~15:19 매수 → 익일 시가 매도. 투입금은 자동 운용이 (계좌 × 비중 ÷ 종목 수)로 정한다.
+        [Overnight] = new BotSettings
+        {
+            Mode = BotMode.FullAuto, Strategy = EntryStrategyKind.OvernightBasket,
+            EntryStartTime = new TimeOnly(15, 10), EntryEndTime = new TimeOnly(15, 19),
+            HoldOvernight = true, NextDayExitMode = NextDayExitMode.AtOpen, NextDayExitTime = new TimeOnly(9, 30),
+            Sizing = SizingMode.FixedAmount, FixedAmount = 1_000_000m, MaxPositionAmount = 5_000_000m,
+            StopLossPct = 5m, UseStructuralStop = false, PartialTakeProfitPct = 0, TakeProfitPct = 0,
+            TrailingActivationPct = 0, MoveStopToBreakEven = false, TimeStopMinutes = 0,
+            MaxEntries = 1, BotTargetProfitPct = 0, BotMaxLossPct = 0, ConvictionSizing = false,
+        },
+        ["종가베팅 (익일 매도)"] = new BotSettings
+        {
+            Mode = BotMode.FullAuto, Strategy = EntryStrategyKind.ClosingBet,
+            EntryStartTime = new TimeOnly(15, 0), EntryEndTime = new TimeOnly(15, 19),
+            HoldOvernight = true, NextDayExitMode = NextDayExitMode.AtOpen, NextDayExitTime = new TimeOnly(10, 0),
+            RiskPerTradePct = 0.2m, StopLossPct = 3m, UseStructuralStop = false,
+            PartialTakeProfitPct = 2m, TakeProfitPct = 5m, TrailingActivationPct = 2.5m, TrailingDistancePct = 1.5m,
+            TimeStopMinutes = 0, MaxEntries = 1, BotTargetProfitPct = 0, BotMaxLossPct = 0,
         },
         ["VWAP 눌림 표준"] = new BotSettings
         {
@@ -208,20 +257,6 @@ public static class BotPresets
         {
             Mode = BotMode.FullAuto, Strategy = EntryStrategyKind.HighBreakout,
             StopLossPct = 2.0m, TakeProfitPct = 6m, TrailingDistancePct = 1.8m, EntryEndTime = new TimeOnly(14, 0),
-        },
-        ["종가베팅 (익일 매도)"] = new BotSettings
-        {
-            Mode = BotMode.FullAuto, Strategy = EntryStrategyKind.ClosingBet,
-            EntryStartTime = new TimeOnly(15, 0), EntryEndTime = new TimeOnly(15, 19),
-            HoldOvernight = true, NextDayExitMode = NextDayExitMode.Managed, NextDayExitTime = new TimeOnly(10, 0),
-            RiskPerTradePct = 0.2m, StopLossPct = 3m, UseStructuralStop = false,
-            PartialTakeProfitPct = 2m, TakeProfitPct = 5m, TrailingActivationPct = 2.5m, TrailingDistancePct = 1.5m,
-            TimeStopMinutes = 0, MaxEntries = 1, BotTargetProfitPct = 0, BotMaxLossPct = 0,
-        },
-        ["보수형"] = new BotSettings
-        {
-            Mode = BotMode.FullAuto, Strategy = EntryStrategyKind.OpeningRangeBreakout,
-            RiskPerTradePct = 0.15m, StopLossPct = 1.2m, MaxEntries = 2, BotTargetProfitPct = 2m, BotMaxLossPct = 1.5m,
         },
     };
 }
@@ -241,18 +276,19 @@ public sealed class AutoPilotSettings
     public TimeOnly DayStartTime { get; set; } = new(9, 5);
 
     /// <summary>이 시각 전에 추가되는 봇은 오전 프리셋(ORB 등), 이후는 장중 프리셋(VWAP 눌림 등)</summary>
-    public TimeOnly MorningUntil { get; set; } = new(10, 0);
+    public TimeOnly MorningUntil { get; set; } = new(9, 30);
 
     /// <summary>단타 신규 진입 마감</summary>
     public TimeOnly DayEntryEndTime { get; set; } = new(14, 30);
 
     /// <summary>단타 보유분 정리 (종가매매 자금 확보)</summary>
-    public TimeOnly DayExitTime { get; set; } = new(14, 50);
+    public TimeOnly DayExitTime { get; set; } = new(15, 5);
 
-    public int MaxDayBots { get; set; } = 6;
+    /// <summary>동시에 감시하는 단타 봇 수 (많을수록 좋은 타이밍을 놓치지 않는다. 실제 보유는 리스크의 동시 보유 한도로 제한)</summary>
+    public int MaxDayBots { get; set; } = 10;
 
     /// <summary>단타 후보 최소 점수 (0 = 제한 없음)</summary>
-    public decimal MinDayScore { get; set; } = 50m;
+    public decimal MinDayScore { get; set; } = 0m;
 
     /// <summary>이 시간 동안 진입이 없고 상위 후보에서 밀려난 단타 봇은 다른 종목으로 교체 (0 = 교체 안 함)</summary>
     public int IdleReplaceMinutes { get; set; } = 20;
@@ -272,18 +308,21 @@ public sealed class AutoPilotSettings
     public bool ClosingEnabled { get; set; } = true;
 
     /// <summary>스캐너를 종가매매 후보 모드로 전환 (분봉 수집에 여유를 둔다)</summary>
-    public TimeOnly ClosingScanTime { get; set; } = new(14, 40);
+    public TimeOnly ClosingScanTime { get; set; } = new(14, 50);
 
     /// <summary>종가 봇 선정 시작 / 마감 (진입 자체는 종가베팅 전략이 15:00~15:19 에 판단)</summary>
-    public TimeOnly ClosingSelectTime { get; set; } = new(14, 55);
+    public TimeOnly ClosingSelectTime { get; set; } = new(15, 5);
     public TimeOnly ClosingSelectEndTime { get; set; } = new(15, 15);
 
-    public int MaxClosingBots { get; set; } = 4;
+    public int MaxClosingBots { get; set; } = 8;
+
+    /// <summary>오버나잇 바스켓에 쓰는 계좌 비중 % (종목 수로 나눠 종목당 투입금)</summary>
+    public decimal ClosingCapitalPct { get; set; } = 60m;
 
     /// <summary>종가 후보 조건 최소 통과 수 (0 = 전부 통과)</summary>
     public int ClosingMinPassed { get; set; }
 
-    public string ClosingPreset { get; set; } = "종가베팅 (익일 매도)";
+    public string ClosingPreset { get; set; } = BotPresets.Overnight;
 
     public AutoPilotSettings Clone() => (AutoPilotSettings)MemberwiseClone();
 
@@ -314,11 +353,11 @@ public sealed record AutoPilotPlan(AutoPilotSettings Settings, BotSettings Morni
         BotSettings Pick(string name, string fallback, Func<BotSettings, bool> ok) =>
             (presets.TryGetValue(name, out var p) && ok(p) ? p : defaults[fallback]).Clone();
 
-        var day = Pick(s.MorningPreset, "ORB 표준", p => p.Strategy is not (EntryStrategyKind.Manual or EntryStrategyKind.ClosingBet));
+        var day = Pick(s.MorningPreset, "ORB 표준", p => p.Strategy is not (EntryStrategyKind.Manual or EntryStrategyKind.ClosingBet or EntryStrategyKind.OvernightBasket));
         BotSettings? day2 = string.IsNullOrEmpty(s.DayPreset) || s.DayPreset == AutoPilotSettings.NoPreset
             ? null
-            : Pick(s.DayPreset, "VWAP 눌림 표준", p => p.Strategy is not (EntryStrategyKind.Manual or EntryStrategyKind.ClosingBet));
-        var closing = Pick(s.ClosingPreset, "종가베팅 (익일 매도)", p => p.Strategy == EntryStrategyKind.ClosingBet);
+            : Pick(s.DayPreset, "VWAP 눌림 표준", p => p.Strategy is not (EntryStrategyKind.Manual or EntryStrategyKind.ClosingBet or EntryStrategyKind.OvernightBasket));
+        var closing = Pick(s.ClosingPreset, BotPresets.Overnight, p => p.Strategy is EntryStrategyKind.ClosingBet or EntryStrategyKind.OvernightBasket);
         return new AutoPilotPlan(s.Clone(), day, day2, closing);
     }
 }

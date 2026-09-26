@@ -349,6 +349,39 @@ public class EntrySignalTests
         Assert.Null(sig.Evaluate(ctx, t2.AddSeconds(5), s, SignalTrigger.Trade));
     }
 
+    private static (SymbolContext Ctx, DateTimeOffset T) OrbSetup(decimal prevClose, decimal lo, decimal hi)
+    {
+        var ctx = new SymbolContext("000001", "테스트") { PreviousClose = prevClose };
+        for (var m = 0; m < 5; m++)
+        {
+            ctx.OnTrade(new TradeTick("000001", lo, 100, Open.AddMinutes(m)));
+            ctx.OnTrade(new TradeTick("000001", hi, 100, Open.AddMinutes(m).AddSeconds(30)));
+        }
+        return (ctx, Open.AddMinutes(6));
+    }
+
+    [Theory]
+    [InlineData(9_700, 10_000, 10_300, true, 1.5)]    // 등락 +6.7%, 범위 3%, 6분 → A등급 1.5배
+    [InlineData(9_700, 10_000, 10_100, true, 1.0)]    // 범위 1% → B등급
+    [InlineData(9_500, 10_000, 10_300, true, 1.0)]    // 등락 +8.9% → 통과하지만 A등급 아님
+    [InlineData(9_000, 10_000, 10_300, false, 0)]     // 등락 +15% → 제외 (10% 초과)
+    [InlineData(9_700, 10_000, 10_800, false, 0)]     // 범위 8% → 제외 (6% 초과)
+    public void OrbAppliesChangeFilterAndGrades(int prevClose, int lo, int hi, bool fires, double mult)
+    {
+        var (ctx, t) = OrbSetup(prevClose, lo, hi);
+        var sig = new OpeningRangeBreakoutSignal();
+        var s = new BotSettings { OrbMinutes = 5 };
+        ctx.OnTrade(new TradeTick("000001", hi - 20, 500, t));
+        sig.Evaluate(ctx, t, s, SignalTrigger.Trade);
+        var price = hi + 50;
+        ctx.OnTrade(new TradeTick("000001", price, 5_000, t.AddSeconds(5)));
+        var fired = sig.Evaluate(ctx, t.AddSeconds(5), s, SignalTrigger.Trade);
+        var change = ((decimal)price / prevClose - 1m) * 100m;
+        if (change < 3m) { Assert.Null(fired); return; }
+        Assert.Equal(fires, fired is not null);
+        if (fired is not null) Assert.Equal((decimal)mult, fired.SizeMultiplier);
+    }
+
     [Fact]
     public void OrbIgnoresReCrossWhenBreakoutHappenedBeforeBotStarted()
     {

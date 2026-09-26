@@ -13,6 +13,9 @@ public interface IAutoPilotHost
     /// <summary>신규 진입이 막힌 이유 (킬스위치·일 손실 한도 등). 없으면 null.</summary>
     string? EntryBlockReason { get; }
 
+    /// <summary>운용 기준 금액 (오버나잇 바스켓 종목당 투입금 계산)</summary>
+    decimal Equity { get; }
+
     void SetScanMode(ScanMode? mode);
 
     /// <summary>봇을 만들고 시작한다. 실패하면 null.</summary>
@@ -186,7 +189,7 @@ public sealed class AutoPilot
             if (preset is null) return;                       // 장중 프리셋 "사용 안 함" → 오전 이후 새 단타 없음
             var bs = preset.Clone();
             bs.Mode = BotMode.FullAuto;
-            if (bs.Strategy is EntryStrategyKind.Manual or EntryStrategyKind.ClosingBet) bs.Strategy = EntryStrategyKind.OpeningRangeBreakout;
+            if (bs.Strategy is EntryStrategyKind.Manual or EntryStrategyKind.ClosingBet or EntryStrategyKind.OvernightBasket) bs.Strategy = EntryStrategyKind.OpeningRangeBreakout;
             bs.HoldOvernight = false;
             if (bs.EntryStartTime < s.DayStartTime) bs.EntryStartTime = s.DayStartTime;
             // 프리셋의 진입 시간대를 넓히지 않는다 (ORB 는 오전 전략 — 오후에 아침 범위 "돌파"는 의미 없음)
@@ -239,6 +242,7 @@ public sealed class AutoPilot
 
     private void FillClosingBots()
     {
+        if (Plan.Closing.Strategy == EntryStrategyKind.OvernightBasket) { FillOvernightBasket(); return; }
         var s = Plan.Settings;
         var passing = _host.Candidates.Where(Passes).ToList();
 
@@ -267,6 +271,37 @@ public sealed class AutoPilot
             bs.HoldOvernight = true;
             _usedClosing.Add(c.Symbol);
             if (Add(c, bs, ClosingRole, $"종가 선정 (조건 {c.ClosingPassed}/{c.ClosingTotal}, 점수 {c.Score:0})")) free--;
+        }
+    }
+
+    /// <summary>
+    /// 오버나잇 바스켓: 종가 후보 중 거래대금 상위 N종목을 사서 다음 날 시가에 판다.
+    /// 종목당 투입금 = 운용 금액 × 바스켓 비중 ÷ N. 상한가 부근·급등 후 밀린 종목은 제외.
+    /// </summary>
+    private void FillOvernightBasket()
+    {
+        var s = Plan.Settings;
+        var free = s.MaxClosingBots - ActiveBots(ClosingRole).Count(b => !b.IsCarriedOver);
+        if (free <= 0) return;
+        var perStock = _host.Equity * s.ClosingCapitalPct / 100m / Math.Max(1, s.MaxClosingBots);
+        if (perStock <= 0) return;
+        var picks = _host.Candidates
+            .Where(c => c.ClosingTotal > 0)                                  // 종가 모드 스캔 결과만
+            .Where(c => c.ChangePct is >= 0m and < 28m)
+            .Where(c => !(c.ChangePct > 8m && c.RangePosition is < 0.3m))
+            .OrderByDescending(c => c.TradingAmount);
+        foreach (var c in picks)
+        {
+            if (free <= 0) break;
+            if (_usedClosing.Contains(c.Symbol) || HasBot(c.Symbol)) continue;
+            var bs = Plan.Closing.Clone();
+            bs.Mode = BotMode.FullAuto;
+            bs.HoldOvernight = true;
+            bs.Sizing = SizingMode.FixedAmount;
+            bs.FixedAmount = Math.Floor(perStock);
+            bs.MaxPositionAmount = Math.Max(bs.MaxPositionAmount, bs.FixedAmount);
+            _usedClosing.Add(c.Symbol);
+            if (Add(c, bs, ClosingRole, $"오버나잇 선정 (거래대금 {c.TradingAmount / 100_000_000m:N0}억, {c.ChangePct:+0.0}%)")) free--;
         }
     }
 

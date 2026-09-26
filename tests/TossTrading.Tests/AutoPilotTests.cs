@@ -20,6 +20,7 @@ internal sealed class FakeAutoPilotHost : IAutoPilotHost
     public IReadOnlyList<ScanCandidate> Candidates => CandidateList;
     public IReadOnlyList<TradingBot> Bots => BotList;
     public string? EntryBlockReason => Block;
+    public decimal Equity { get; set; } = 10_000_000m;
     public void SetScanMode(ScanMode? mode) => Mode = mode;
 
     public TradingBot? AddAutoBot(string symbol, string name, BotSettings settings, string role)
@@ -43,7 +44,22 @@ public class AutoPilotTests
     private readonly FakeAutoPilotHost _host = new();
     private readonly AutoPilot _ap;
 
-    public AutoPilotTests() => _ap = new AutoPilot(_host, AutoPilotPlan.Default(enabled: true));
+    public AutoPilotTests() => _ap = new AutoPilot(_host, LegacyPlan());
+
+    /// <summary>종가베팅 방식(이전 기본값)으로 고정한 계획 — 선정·교체·정리 규칙 자체를 시험한다</summary>
+    private static AutoPilotPlan LegacyPlan(Action<AutoPilotSettings>? tweak = null)
+    {
+        var s = new AutoPilotSettings
+        {
+            Enabled = true, MaxDayBots = 6, MinDayScore = 50, MorningUntil = new TimeOnly(10, 0), DayExitTime = new TimeOnly(14, 50),
+            ClosingScanTime = new TimeOnly(14, 40), ClosingSelectTime = new TimeOnly(14, 55), MaxClosingBots = 4,
+            ClosingPreset = "종가베팅 (익일 매도)",
+        };
+        tweak?.Invoke(s);
+        var presets = BotPresets.CreateDefaults();
+        presets[BotPresets.Orb].EntryEndTime = new TimeOnly(11, 0);
+        return AutoPilotPlan.FromPresets(s, presets);
+    }
 
     private void At(int h, int m, int s = 0) => _host.Clock.Now = Kst.At(Date, new TimeOnly(h, m, s));
 
@@ -72,7 +88,7 @@ public class AutoPilotTests
         Assert.Equal(AutoPilot.DayRole, bot.AutoRole);
         Assert.Equal(BotMode.FullAuto, bot.Settings.Mode);
         Assert.Equal(EntryStrategyKind.OpeningRangeBreakout, bot.Settings.Strategy);   // 10시 전 → 오전 프리셋
-        Assert.Equal(new TimeOnly(11, 0), bot.Settings.EntryEndTime);             // 프리셋의 진입 시간대를 넓히지 않음
+        Assert.Equal(new TimeOnly(11, 0), bot.Settings.EntryEndTime);             // 프리셋의 진입 시간대를 넓히지 않음 (14:30 으로 덮지 않음)
         Assert.Equal(new TimeOnly(14, 50), bot.Settings.ForceExitTime);
         Assert.Equal(1, bot.Settings.MaxEntries);                                   // ORB 는 하루 첫 돌파 1회
         Assert.Equal(BotState.Watching, bot.State);
@@ -90,7 +106,7 @@ public class AutoPilotTests
     [Fact]
     public void AfternoonUsesDayPresetAndDoesNotReuseSymbols()
     {
-        _ap.UpdatePlan(AutoPilotPlan.FromPresets(new AutoPilotSettings { Enabled = true, DayPreset = "VWAP 눌림 표준" }, BotPresets.CreateDefaults()));
+        _ap.UpdatePlan(LegacyPlan(s => s.DayPreset = "VWAP 눌림 표준"));
         At(11, 0);
         _host.CandidateList = new() { Day("A", 80) };
         _ap.OnTimer();
@@ -221,7 +237,7 @@ public class AutoPilotTests
         _ap.OnTimer();
         Assert.Equal(new[] { "U", "A" }, _host.BotList.Select(b => b.Symbol));      // U 는 이미 봇이 있어 건너뜀
 
-        _ap.UpdatePlan(AutoPilotPlan.Default(enabled: false));
+        _ap.UpdatePlan(LegacyPlan(s => s.Enabled = false));
         var count = _host.BotList.Count;
         _host.CandidateList = new() { Day("B", 80) };
         Step();
@@ -243,8 +259,30 @@ public class AutoPilotTests
         var presets = new Dictionary<string, BotSettings> { ["ORB 표준"] = new BotSettings { Mode = BotMode.ManualEntry } };
         var plan = AutoPilotPlan.FromPresets(new AutoPilotSettings { MorningPreset = "ORB 표준", ClosingPreset = "없음" }, presets);
         Assert.Equal(EntryStrategyKind.OpeningRangeBreakout, plan.Morning.Strategy);  // 수동 전략 프리셋 → 기본값
-        Assert.Equal(EntryStrategyKind.ClosingBet, plan.Closing.Strategy);
+        Assert.Equal(EntryStrategyKind.OvernightBasket, plan.Closing.Strategy);        // 없는 프리셋 → 기본(오버나잇 바스켓)
         Assert.Empty(new AutoPilotSettings().Validate());
-        Assert.NotEmpty(new AutoPilotSettings { DayExitTime = new TimeOnly(15, 0) }.Validate());
+        Assert.NotEmpty(new AutoPilotSettings { DayExitTime = new TimeOnly(15, 10) }.Validate());   // 종가 선정(15:05)보다 늦게 정리하면 자금이 겹침
+    }
+
+    [Fact]
+    public void OvernightBasketPicksTopByTradingAmountAndSizesFromEquity()
+    {
+        var ap = new AutoPilot(_host, AutoPilotPlan.Default(enabled: true));          // 새 기본값: 오버나잇 바스켓 8종목, 60%
+        _host.Equity = 8_000_000m;
+        At(15, 6);
+        ScanCandidate C(string sym, decimal chg, decimal amount, decimal rp = 0.8m) =>
+            Day(sym, 60) with { ChangePct = chg, TradingAmount = amount, RangePosition = rp, ClosingPassed = 3, ClosingTotal = 6 };
+        _host.CandidateList = new()
+        {
+            C("A", 5, 50e9m), C("B", 12, 90e9m, rp: 0.2m) /* 급등 후 밀림 */, C("L", 29.5m, 80e9m) /* 상한가 */,
+            C("N", -2, 70e9m) /* 하락 */, C("D", 1, 10e9m), C("E", 7, 60e9m),
+        };
+        ap.OnTimer();
+        Assert.Equal(new[] { "E", "A", "D" }, _host.BotList.Select(b => b.Symbol));      // 거래대금 순, 제외 조건 적용
+        var bot = _host.BotList[0];
+        Assert.Equal(EntryStrategyKind.OvernightBasket, bot.Settings.Strategy);
+        Assert.Equal(SizingMode.FixedAmount, bot.Settings.Sizing);
+        Assert.Equal(600_000m, bot.Settings.FixedAmount);                               // 800만 × 60% ÷ 8
+        Assert.Equal(NextDayExitMode.AtOpen, bot.Settings.NextDayExitMode);
     }
 }

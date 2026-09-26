@@ -371,6 +371,7 @@ public sealed class TradingEngine : IBotHost, IAsyncDisposable
         public IReadOnlyList<ScanCandidate> Candidates => e._candidates;
         public IReadOnlyList<TradingBot> Bots => e._bots;
         public string? EntryBlockReason => e._risk.BlockReason(e._clock.Now, e._bots.Sum(b => b.UnrealizedNet));
+        public decimal Equity => e._risk.StartEquity > 0 ? e._risk.StartEquity : e._account.Equity;
 
         public void SetScanMode(ScanMode? mode)
         {

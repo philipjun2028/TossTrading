@@ -55,6 +55,12 @@ public enum EntryStrategyKind
     HighBreakout,
     /// <summary>종가매매: 장 마감 전 강세 종목 매수 → 익일 매도</summary>
     ClosingBet,
+
+    /// <summary>
+    /// 오버나잇 바스켓: 장 마감 전(15:10~) 그날 거래가 몰린 종목을 거래대금 순으로 여러 개 사서 다음 날 시가에 판다.
+    /// 2026-01~09 토스 데이터 연구에서 개별 조건보다 "거래대금 상위 + 시가 매도"가 안정적으로 우위.
+    /// </summary>
+    OvernightBasket,
 }
 
 /// <summary>익일 보유 포지션의 청산 방식</summary>
