@@ -46,7 +46,7 @@
                     <Button Content="▶ 시작" Command="{Binding StartCommand}" Margin="10,3,3,3" Padding="12,4" FontWeight="SemiBold" />
                     <Button Content="■ 중지" Command="{Binding StopCommand}" Margin="3" Padding="12,4" />
                     <dxe:CheckEdit Content="🤖 자동 운용" IsChecked="{Binding AutoPilotEnabled}" Margin="14,3,3,3" FontWeight="SemiBold" VerticalAlignment="Center"
-                                   ToolTip="켜면 장중에는 단타 후보를 자동으로 골라 단타 봇을 돌리고, 14:50 단타 정리 후 종가매매 후보를 골라 종가베팅(익일 매도)을 자동 진행합니다. 시간·봇 수·프리셋은 [설정 → 자동 운용]" />
+                                   ToolTip="켜면 장중에는 단타 후보를 자동으로 골라 단타 봇을 돌리고, 14:50 단타 정리 후 종가매매 후보를 골라 종가베팅(익일 매도)을 진행합니다.&#x0a;끄면 새 종목을 고르지 않고, 이미 보유한 종목은 각 봇이 규칙대로 계속 관리합니다.&#x0a;시간·봇 수·프리셋은 [설정 → 자동 운용]" />
                     <TextBlock Text="{Binding AutoPilotStatus}" Margin="6,0" VerticalAlignment="Center" Foreground="#FF22C55E" />
                     <TextBlock Text="{Binding Status}" Margin="12,0" Foreground="{StaticResource SubText}" VerticalAlignment="Center" />
                 </StackPanel>
@@ -126,23 +126,11 @@
 
             <GroupBox Grid.Column="0" Header="{Binding ScannerHeader}" Margin="4">
                 <DockPanel>
-                    <DockPanel DockPanel.Dock="Top" Margin="0,0,0,4">
-                        <TextBlock Text="모드" Style="{StaticResource Caption}" Margin="4,0" />
-                        <dxe:ComboBoxEdit Width="180" Margin="3" IsTextEditable="False"
-                                          ItemsSource="{Binding ScanModeOptions}" DisplayMember="Label" ValueMember="Value"
-                                          EditValue="{Binding ScannerMode}" IsEnabled="{Binding CanChangeScanMode}"
-                                          ToolTip="자동 운용 중에는 시간대에 따라 자동으로 바뀝니다" />
-                        <TextBlock Margin="8,0" Foreground="{StaticResource SubText}" FontSize="11" TextWrapping="Wrap" VerticalAlignment="Center"
-                                   Visibility="{Binding IsClosingMode, Converter={StaticResource BoolToVis}}"
-                                   Text="14:30 이후 사용 권장. ✔ 통과 ✖ 실패 ? 데이터 없음 · 상위 종목에 '종가베팅' 프리셋으로 봇 추가 → 15:00~15:19 에 봇이 조건 재확인 후 매수" />
-                    </DockPanel>
-                    <WrapPanel DockPanel.Dock="Bottom" Margin="0,4,0,0">
-                        <TextBlock Text="프리셋" Style="{StaticResource Caption}" Margin="4,0" />
-                        <dxe:ComboBoxEdit Width="180" Margin="3" IsTextEditable="False" ItemsSource="{Binding PresetNames}" EditValue="{Binding SelectedPreset}" />
-                        <Button Content="＋ 선택 종목 봇 추가" Command="{Binding AddSelectedCandidateCommand}" Margin="3" Padding="10,4" FontWeight="SemiBold" />
-                        <dxe:TextEdit Width="90" Margin="3" EditValue="{Binding ManualSymbol, UpdateSourceTrigger=PropertyChanged}" NullText="종목코드" />
-                        <Button Content="코드로 추가" Command="{Binding AddManualSymbolCommand}" Margin="3" Padding="10,4" />
-                    </WrapPanel>
+                    <TextBlock DockPanel.Dock="Top" Margin="4,0,4,4" Foreground="{StaticResource SubText}" FontSize="11" TextWrapping="Wrap"
+                               Text="시간대에 따라 자동 전환: 09:00~ 단타 후보 → 14:40~ 종가매매 후보. 행을 클릭하면 차트를 봅니다." />
+                    <TextBlock DockPanel.Dock="Top" Margin="4,0,4,4" Foreground="{StaticResource SubText}" FontSize="11" TextWrapping="Wrap"
+                               Visibility="{Binding IsClosingMode, Converter={StaticResource BoolToVis}}"
+                               Text="종가 조건: ✔ 통과 ✖ 실패 ? 데이터 없음 — 모두 통과한 종목으로 종가베팅 봇이 만들어지고 15:00~15:19 에 조건을 다시 확인한 뒤 매수합니다." />
                     <dxg:GridControl ItemsSource="{Binding Candidates}" SelectedItem="{Binding SelectedCandidate}" AutoGenerateColumns="None">
                         <dxg:GridControl.Columns>
                             <dxg:GridColumn FieldName="Name" Header="종목" Width="120" />
@@ -206,32 +194,21 @@
 
             <GridSplitter Grid.Column="1" Width="5" HorizontalAlignment="Stretch" Background="Transparent" />
 
-            <GroupBox Grid.Column="2" Header="봇 — 종목별 독립 운용 (각각 설정)" Margin="4">
+            <GroupBox Grid.Column="2" Header="봇 — 자동 선정 종목 (종목별 독립 운용 · 끝나면 자동 정리)" Margin="4">
                 <DockPanel>
-                    <Border DockPanel.Dock="Top" Style="{StaticResource Card}" Margin="0,0,0,4" Padding="8,4" BorderBrush="{StaticResource Warn}"
-                            Visibility="{Binding SelectedBot.HasPendingSignal, Converter={StaticResource BoolToVis}, FallbackValue=Collapsed}">
-                        <DockPanel>
-                            <Button DockPanel.Dock="Right" Content="거절" Command="{Binding RejectCommand}" Margin="3" Padding="10,4" />
-                            <Button DockPanel.Dock="Right" Content="✔ 승인(매수)" Command="{Binding ApproveCommand}" Margin="3" Padding="10,4" FontWeight="SemiBold" />
-                            <TextBlock Text="{Binding SelectedBot.PendingSignal, StringFormat=진입 신호: {0}}" Foreground="{StaticResource Warn}"
-                                       TextWrapping="Wrap" VerticalAlignment="Center" />
-                        </DockPanel>
-                    </Border>
                     <WrapPanel DockPanel.Dock="Bottom" Margin="0,4,0,0" IsEnabled="{Binding HasSelectedBot}">
-                        <Button Content="▶ 시작" Command="{Binding StartBotCommand}" Margin="3" Padding="10,4" />
-                        <Button Content="수동 매수" Command="{Binding ManualBuyCommand}" Margin="3" Padding="10,4" FontWeight="SemiBold" />
-                        <Button Content="청산" Command="{Binding FlattenCommand}" Margin="3" Padding="10,4" />
-                        <Button Content="정지(청산)" Command="{Binding StopBotCommand}" Margin="3" Padding="10,4" />
-                        <Button Content="설정 변경" Command="{Binding EditBotCommand}" Margin="3" Padding="10,4" />
-                        <Button Content="프리셋으로 저장" Command="{Binding SaveAsPresetCommand}" Margin="3" Padding="10,4" />
-                        <Button Content="삭제" Command="{Binding RemoveBotCommand}" Margin="3" Padding="10,4" />
+                        <Button Content="청산" Command="{Binding FlattenCommand}" Margin="3" Padding="10,4"
+                                ToolTip="선택한 봇의 보유분을 지금 매도 (봇은 계속 감시)" />
+                        <Button Content="정지(청산)" Command="{Binding StopBotCommand}" Margin="3" Padding="10,4"
+                                ToolTip="보유분을 매도하고 이 종목 매매를 끝냄 (목록에서 자동으로 정리됨)" />
+                        <Button Content="설정 변경" Command="{Binding EditBotCommand}" Margin="3" Padding="10,4"
+                                ToolTip="이 봇의 손절·익절 등을 바꿈 (기본값은 [설정 → 자동 운용]의 프리셋)" />
                     </WrapPanel>
                     <dxg:GridControl ItemsSource="{Binding Bots}" SelectedItem="{Binding SelectedBot}" AutoGenerateColumns="None">
                         <dxg:GridControl.Columns>
                             <dxg:GridColumn FieldName="Name" Header="종목" Width="100" />
                             <dxg:GridColumn FieldName="Origin" Header="구분" Width="60" />
                             <dxg:GridColumn FieldName="Strategy" Header="전략" Width="60" />
-                            <dxg:GridColumn FieldName="Mode" Header="모드" Width="60" />
                             <dxg:GridColumn FieldName="StateText" Header="상태" Width="160" />
                             <dxg:GridColumn FieldName="Quantity" Header="수량" Width="55">
                                 <dxg:GridColumn.EditSettings><dxe:TextEditSettings DisplayFormat="N0" HorizontalContentAlignment="Right" /></dxg:GridColumn.EditSettings>

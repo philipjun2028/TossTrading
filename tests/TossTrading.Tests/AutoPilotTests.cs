@@ -201,25 +201,29 @@ public class AutoPilotTests
     }
 
     [Fact]
-    public void UserBotsAreNeverTouchedAndDisablingRestoresScannerMode()
+    public void ExistingBotsBlockSymbolAndDisablingStopsSelectionOnly()
     {
         At(9, 10);
-        var user = _host.AddAutoBot("U", "사용자", new BotSettings(), "x")!;
-        user.AutoRole = null;
+        var other = _host.AddAutoBot("U", "기존", new BotSettings(), "x")!;
+        other.AutoRole = null;
         _host.CandidateList = new() { Day("U", 90), Day("A", 80) };
         _ap.OnTimer();
         Assert.Equal(new[] { "U", "A" }, _host.BotList.Select(b => b.Symbol));      // U 는 이미 봇이 있어 건너뜀
 
-        user.Stop(flatten: false);
-        Step();
-        Assert.Contains(user, _host.BotList);                                       // 사용자 봇은 정리하지 않음
-
         _ap.UpdatePlan(AutoPilotPlan.Default(enabled: false));
-        Assert.Null(_host.Mode);
         var count = _host.BotList.Count;
         _host.CandidateList = new() { Day("B", 80) };
         Step();
-        Assert.Equal(count, _host.BotList.Count);
+        Assert.Equal(count, _host.BotList.Count);                                    // 새 종목은 안 고름
+        Assert.Equal("꺼짐", _ap.Phase);
+
+        other.Stop(flatten: false);                                                   // 꺼져 있어도 끝난 봇은 정리
+        Step();
+        Assert.DoesNotContain(other, _host.BotList);
+
+        At(14, 41);
+        _ap.OnTimer();
+        Assert.Equal(ScanMode.ClosingBet, _host.Mode);                                // 스캐너 모드는 시간대대로
     }
 
     [Fact]

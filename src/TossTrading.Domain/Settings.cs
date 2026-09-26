@@ -189,28 +189,28 @@ public sealed class ScannerSettings
     public ScannerSettings Clone() => (ScannerSettings)MemberwiseClone();
 }
 
+/// <summary>자동 운용이 쓰는 봇 설정 묶음 (오전·장중·종가 프리셋). 모두 완전자동.</summary>
 public static class BotPresets
 {
     public static Dictionary<string, BotSettings> CreateDefaults() => new()
     {
-        ["수동진입·자동청산"] = new BotSettings(),
         ["ORB 표준"] = new BotSettings
         {
-            Mode = BotMode.SemiAuto, Strategy = EntryStrategyKind.OpeningRangeBreakout,
+            Mode = BotMode.FullAuto, Strategy = EntryStrategyKind.OpeningRangeBreakout,
         },
         ["VWAP 눌림 표준"] = new BotSettings
         {
-            Mode = BotMode.SemiAuto, Strategy = EntryStrategyKind.VwapReclaim,
+            Mode = BotMode.FullAuto, Strategy = EntryStrategyKind.VwapReclaim,
             EntryEndTime = new TimeOnly(14, 0),
         },
         ["고가돌파 공격형"] = new BotSettings
         {
-            Mode = BotMode.SemiAuto, Strategy = EntryStrategyKind.HighBreakout,
+            Mode = BotMode.FullAuto, Strategy = EntryStrategyKind.HighBreakout,
             StopLossPct = 2.0m, TakeProfitPct = 6m, TrailingDistancePct = 1.8m, EntryEndTime = new TimeOnly(14, 0),
         },
         ["종가베팅 (익일 매도)"] = new BotSettings
         {
-            Mode = BotMode.SemiAuto, Strategy = EntryStrategyKind.ClosingBet,
+            Mode = BotMode.FullAuto, Strategy = EntryStrategyKind.ClosingBet,
             EntryStartTime = new TimeOnly(15, 0), EntryEndTime = new TimeOnly(15, 19),
             HoldOvernight = true, NextDayExitMode = NextDayExitMode.Managed, NextDayExitTime = new TimeOnly(10, 0),
             RiskPerTradePct = 0.2m, StopLossPct = 3m, UseStructuralStop = false,
@@ -219,7 +219,7 @@ public static class BotPresets
         },
         ["보수형"] = new BotSettings
         {
-            Mode = BotMode.SemiAuto, Strategy = EntryStrategyKind.OpeningRangeBreakout,
+            Mode = BotMode.FullAuto, Strategy = EntryStrategyKind.OpeningRangeBreakout,
             RiskPerTradePct = 0.15m, StopLossPct = 1.2m, MaxEntries = 2, BotTargetProfitPct = 2m, BotMaxLossPct = 1.5m,
         },
     };

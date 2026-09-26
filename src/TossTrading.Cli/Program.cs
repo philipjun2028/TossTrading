@@ -186,7 +186,7 @@ static async Task<int> BacktestAsync(string[] args, string? dataDir, string? sou
     var lastStage = "";
     var progress = new Progress<TossTrading.Engine.Backtest.BacktestProgress>(p =>
     {
-        if (p.Stage == "재생" || p.Stage != lastStage) Console.WriteLine($"[{p.Stage}] {p.Message}");
+        if (p.Stage != lastStage || p.Message.Contains("완료")) Console.WriteLine($"{p.Overall,5:0.0}% [{p.Stage}] {p.Message}");
         lastStage = p.Stage;
     });
     try

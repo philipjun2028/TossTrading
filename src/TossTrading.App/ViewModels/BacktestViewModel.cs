@@ -76,6 +76,19 @@ public sealed class BacktestViewModel : ViewModelBase
     public double Progress { get => GetValue<double>(); private set => SetValue(value); }
     public string ProgressText { get => GetValue<string>(); private set => SetValue(value); }
 
+    /// <summary>"45% · 경과 1분 20초 · 남은 시간 약 1분 40초"</summary>
+    public string ProgressSummary { get => GetValue<string>(); private set => SetValue(value); }
+
+    private readonly EtaEstimator _eta = new();
+    private System.Windows.Threading.DispatcherTimer? _clock;
+
+    private void UpdateSummary(double percent, TimeSpan? remaining)
+    {
+        var elapsed = _eta.Elapsed(DateTime.UtcNow);
+        ProgressSummary = $"{percent:0}% · 경과 {EtaEstimator.Format(elapsed)}"
+                          + (remaining is { } r ? $" · 남은 시간 약 {EtaEstimator.Format(r)}" : " · 남은 시간 계산 중");
+    }
+
     // ---------------------------------------------------------------- 결과
     public bool HasResult { get => GetValue<bool>(); private set => SetValue(value); }
     public decimal ReturnPct { get => GetValue<decimal>(); private set => SetValue(value); }
@@ -130,6 +143,13 @@ public sealed class BacktestViewModel : ViewModelBase
         IsRunning = true;
         HasResult = false;
         Progress = 0;
+        _eta.Reset(DateTime.UtcNow);
+        TimeSpan? lastEta = null;
+        UpdateSummary(0, null);
+        // 진행 이벤트가 뜸한 구간(네트워크 대기 등)에도 경과 시간은 계속 흐르게
+        _clock = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+        _clock.Tick += (_, _) => UpdateSummary(Progress, lastEta);
+        _clock.Start();
         _cts = new CancellationTokenSource();
         TossConnection? conn = null;
         try
@@ -148,18 +168,17 @@ public sealed class BacktestViewModel : ViewModelBase
             var progress = new Progress<BacktestProgress>(p =>
             {
                 ProgressText = $"[{p.Stage}] {p.Message}";
-                Progress = p.Stage switch
-                {
-                    "일봉" => p.Percent * 0.2,
-                    "분봉" or "재생" => 20 + p.Percent * 0.8,
-                    _ => Progress,
-                };
+                Progress = Math.Max(Progress, p.Overall); // 되돌아가지 않게
+                lastEta = _eta.Update(DateTime.UtcNow, Progress);
+                UpdateSummary(Progress, lastEta);
             });
             var ct = _cts.Token;
             var result = await Task.Run(() => new BacktestRunner(provider, options, progress).RunAsync(ct), ct);
             await Task.Run(() => BacktestReport.Save(result));
             Show(result);
             Progress = 100;
+            UpdateSummary(100, TimeSpan.Zero);
+            ProgressSummary = $"완료 · 소요 {EtaEstimator.Format(_eta.Elapsed(DateTime.UtcNow))}";
             ProgressText = (result.Canceled ? "취소됨 — 그때까지의 결과입니다. " : "완료. ") + $"저장: {result.OutputDirectory}";
         }
         catch (OperationCanceledException)
@@ -174,6 +193,8 @@ public sealed class BacktestViewModel : ViewModelBase
         finally
         {
             if (conn is not null) await conn.DisposeAsync();
+            _clock?.Stop();
+            _clock = null;
             _cts.Dispose();
             _cts = null;
             IsRunning = false;

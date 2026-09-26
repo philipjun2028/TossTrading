@@ -206,3 +206,29 @@ internal sealed class SyncProgress<T>(Action<T> action) : IProgress<T>
 {
     public void Report(T value) => action(value);
 }
+
+public class EtaEstimatorTests
+{
+    [Fact]
+    public void EstimatesFromRecentSpeed()
+    {
+        var eta = new EtaEstimator(TimeSpan.FromSeconds(30));
+        var t0 = new DateTime(2026, 9, 26, 10, 0, 0);
+        eta.Reset(t0);
+        Assert.Null(eta.Update(t0, 0));
+        Assert.Null(eta.Update(t0.AddSeconds(1), 1));                  // 너무 이름
+        // 처음엔 느림(일봉 다운로드) → 나중엔 빠름(재생): 최근 속도로 추정
+        for (var s = 2; s <= 60; s++) eta.Update(t0.AddSeconds(s), s * 0.5);   // 0.5%/초
+        for (var s = 61; s <= 90; s++) eta.Update(t0.AddSeconds(s), 30 + (s - 60) * 2.0); // 2%/초
+        var remaining = eta.Update(t0.AddSeconds(91), 92)!.Value;
+        Assert.InRange(remaining.TotalSeconds, 3, 6);                  // 8% ÷ 2%/초 ≈ 4초
+        Assert.Equal(TimeSpan.FromSeconds(91), eta.Elapsed(t0.AddSeconds(91)));
+        Assert.Equal(TimeSpan.Zero, eta.Update(t0.AddSeconds(92), 100));
+    }
+
+    [Theory]
+    [InlineData(45, "45초")]
+    [InlineData(125, "2분 05초")]
+    [InlineData(3_900, "1시간 5분")]
+    public void FormatsKorean(int seconds, string expected) => Assert.Equal(expected, EtaEstimator.Format(TimeSpan.FromSeconds(seconds)));
+}

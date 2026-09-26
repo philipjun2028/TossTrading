@@ -26,7 +26,7 @@ public sealed class AppSettings
     public Dictionary<string, BotSettings> Presets { get; set; } = BotPresets.CreateDefaults();
 
     /// <summary>자동 운용 (종목 자동 선정 + 단타 → 종가매매 자동 전환)</summary>
-    public AutoPilotSettings AutoPilot { get; set; } = new();
+    public AutoPilotSettings AutoPilot { get; set; } = new() { Enabled = true };
 
     public AutoPilotPlan AutoPilotPlan() => Domain.AutoPilotPlan.FromPresets(AutoPilot, Presets);
 
@@ -101,7 +101,7 @@ public static class SettingsStore
                 var s = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(FilePath), Json);
                 if (s is not null)
                 {
-                    if (s.Presets.Count == 0) s.Presets = BotPresets.CreateDefaults();
+                    MigratePresets(s);
                     return s;
                 }
             }
@@ -111,6 +111,18 @@ public static class SettingsStore
             // 손상된 설정 → 기본값
         }
         return new AppSettings();
+    }
+
+    /// <summary>
+    /// 종목 자동 선정으로 바뀐 뒤: 수동 진입 전용 프리셋은 쓸 곳이 없어 지우고, 나머지는 완전자동으로 맞춘다.
+    /// </summary>
+    public static void MigratePresets(AppSettings s)
+    {
+        foreach (var name in s.Presets.Where(kv => kv.Value.Strategy == EntryStrategyKind.Manual).Select(kv => kv.Key).ToList())
+            s.Presets.Remove(name);
+        foreach (var p in s.Presets.Values) p.Mode = BotMode.FullAuto;
+        foreach (var (name, p) in BotPresets.CreateDefaults())
+            s.Presets.TryAdd(name, p); // 자동 운용 기본 프리셋이 지워졌으면 되살림
     }
 
     public static void Save(AppSettings settings)

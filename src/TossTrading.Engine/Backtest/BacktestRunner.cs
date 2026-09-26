@@ -30,7 +30,8 @@ public sealed class BacktestOptions
     public string? OutputDirectory { get; set; }
 }
 
-public sealed record BacktestProgress(string Stage, int Done, int Total, string Message)
+/// <summary>진행 상황. Overall = 전체 진행률 0~100 (종목목록 1% · 일봉 29% · 날짜별 분봉+재생 70%)</summary>
+public sealed record BacktestProgress(string Stage, int Done, int Total, string Message, double Overall = 0)
 {
     public double Percent => Total > 0 ? Math.Clamp(Done * 100.0 / Total, 0, 100) : 0;
 }
@@ -90,7 +91,7 @@ public sealed class BacktestRunner
         if (planErrors.Count > 0) throw new ArgumentException(string.Join("\n", planErrors));
 
         // ---- 1. 종목 풀 + 일봉 ----
-        Report("종목 목록", 0, 1, "대상 종목 조회 중");
+        Report("종목 목록", 0, 1, "대상 종목 조회 중", 0);
         var infos = new Dictionary<string, StockInfo>();
         foreach (var i in await _history.GetUniverseAsync(ct).ConfigureAwait(false))
         {
@@ -110,9 +111,10 @@ public sealed class BacktestRunner
         {
             ct.ThrowIfCancellationRequested();
             n++;
-            var eta = n > 20 ? TimeSpan.FromSeconds((DateTime.UtcNow - dailyStarted).TotalSeconds / n * (infos.Count - n)) : (TimeSpan?)null;
+            var slow = n > 20 && (DateTime.UtcNow - dailyStarted).TotalSeconds > 5;
             Report("일봉", n, infos.Count,
-                $"{infos[sym].Name} 일봉 ({n:N0}/{infos.Count:N0}{(eta is { } e && e.TotalSeconds > 5 ? $", 약 {e.TotalMinutes:0.#}분 남음 — 받은 데이터는 저장되어 다음부터 빠름" : "")})");
+                $"{infos[sym].Name} 일봉 ({n:N0}/{infos.Count:N0}{(slow ? " — 받은 데이터는 저장되어 다음부터 빠름" : "")})",
+                1 + 29.0 * n / infos.Count);
             try
             {
                 var bars = await _history.GetDailyBarsAsync(sym, _o.To, dailyCount, ct).ConfigureAwait(false);
@@ -176,7 +178,9 @@ public sealed class BacktestRunner
                 foreach (var sym in picks)
                 {
                     if (ct.IsCancellationRequested) break;
-                    Report("분봉", di * 1000 + ++k, days.Count * 1000, $"{date:MM/dd} {Name(infos, sym)} 분봉 ({k}/{picks.Count})");
+                    ++k;
+                    Report("분봉", di * 1000 + k, days.Count * 1000, $"{date:MM/dd} {Name(infos, sym)} 분봉 ({k}/{picks.Count})",
+                        DayProgress(di, days.Count, 0.4 * k / Math.Max(1, picks.Count)));
                     try
                     {
                         var bars = await _history.GetMinuteBarsAsync(sym, date, ct).ConfigureAwait(false);
@@ -210,7 +214,7 @@ public sealed class BacktestRunner
                 replay.BeginDay(date, minute, dailyBefore, infos);
 
                 var tradesBefore = engine.Snapshot.Trades.Count;
-                Report("재생", di, days.Count, $"{date:yyyy-MM-dd} 재생 중 ({minute.Count}종목)");
+                Report("재생", di, days.Count, $"{date:yyyy-MM-dd} 재생 중 ({minute.Count}종목)", DayProgress(di, days.Count, 0.4));
 
                 // 장 시작 전: 날짜 변경 처리
                 await StepAsync(engine, replay, Kst.At(date, new TimeOnly(8, 59))).ConfigureAwait(false);
@@ -234,6 +238,9 @@ public sealed class BacktestRunner
                                 await engine.SettleAsync(none).ConfigureAwait(false);
                             }
                         }
+                        if (m % 30 == 0 && m > 0)
+                            Report("재생", di, days.Count, $"{date:yyyy-MM-dd} {Kst.TimeOf(minuteStart):HH\\:mm} 재생 중 ({minute.Count}종목)",
+                                DayProgress(di, days.Count, 0.4 + 0.6 * m / 390.0));
                         if (m % 5 == 0)
                         {
                             var eq = (await paper.GetAccountSnapshotAsync(none).ConfigureAwait(false)).Equity;
@@ -257,7 +264,8 @@ public sealed class BacktestRunner
                     Math.Round((equity / _o.StartingCash - 1m) * 100m, 3),
                     snap.Bots.Count(b => b.Quantity > 0), note));
                 prevEquity = equity;
-                Report("재생", di + 1, days.Count, $"{date:yyyy-MM-dd} 완료 · 누적 {(equity / _o.StartingCash - 1m) * 100m:+0.00;-0.00}%");
+                Report("재생", di + 1, days.Count, $"{date:yyyy-MM-dd} 완료 · 누적 {(equity / _o.StartingCash - 1m) * 100m:+0.00;-0.00}%",
+                    DayProgress(di, days.Count, 1.0));
             }
 
             await engine.TickAsync().ConfigureAwait(false);
@@ -320,7 +328,12 @@ public sealed class BacktestRunner
 
     private static string Name(Dictionary<string, StockInfo> infos, string sym) => infos.TryGetValue(sym, out var i) ? i.Name : sym;
 
-    private void Report(string stage, int done, int total, string message) => _progress?.Report(new BacktestProgress(stage, done, total, message));
+    private void Report(string stage, int done, int total, string message, double overall) =>
+        _progress?.Report(new BacktestProgress(stage, done, total, message, Math.Clamp(overall, 0, 100)));
+
+    /// <summary>날짜 루프 구간(30~100%) 안에서의 전체 진행률. fraction = 그날 진행 비율 0~1</summary>
+    private static double DayProgress(int dayIndex, int dayCount, double fraction) =>
+        30 + 70.0 * (dayIndex + Math.Clamp(fraction, 0, 1)) / Math.Max(1, dayCount);
 
     private void Warn(string message)
     {

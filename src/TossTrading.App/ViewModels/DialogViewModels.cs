@@ -23,7 +23,6 @@ public sealed class BotSettingsViewModel : ViewModelBase
         _app = app;
         _referencePrice = referencePrice;
         Result = settings;
-        StartImmediately = true;
         CostHint = "";
         UpdateCostHintCommand = new DelegateCommand(UpdateCostHint);
         OkCommand = new DelegateCommand(Ok);
@@ -35,25 +34,16 @@ public sealed class BotSettingsViewModel : ViewModelBase
     public BotSettings S { get; }
     public string Title { get; }
     public bool IsEdit { get; }
-    public bool ShowStartOption => !IsEdit;
     public BotSettings Result { get; private set; }
 
-    public bool StartImmediately { get => GetValue<bool>(); set => SetValue(value); }
     public string CostHint { get => GetValue<string>(); private set => SetValue(value); }
 
     public DelegateCommand UpdateCostHintCommand { get; }
     public DelegateCommand OkCommand { get; }
     public DelegateCommand CancelCommand { get; }
 
-    public IReadOnlyList<EnumOption<BotMode>> ModeOptions { get; } = new[]
-    {
-        new EnumOption<BotMode>(BotMode.ManualEntry, "A. 수동진입 · 자동청산"),
-        new EnumOption<BotMode>(BotMode.SemiAuto, "B. 반자동 (신호 → 승인)"),
-        new EnumOption<BotMode>(BotMode.FullAuto, "C. 완전자동"),
-    };
-
     public IReadOnlyList<EnumOption<EntryStrategyKind>> StrategyOptions { get; } =
-        Enum.GetValues<EntryStrategyKind>().Select(k => new EnumOption<EntryStrategyKind>(k, EntrySignalFactory.DisplayName(k) switch
+        Enum.GetValues<EntryStrategyKind>().Where(k => k != EntryStrategyKind.Manual).Select(k => new EnumOption<EntryStrategyKind>(k, EntrySignalFactory.DisplayName(k) switch
         {
             "ORB" => "ORB (시가범위 돌파)",
             "VWAP눌림" => "VWAP 눌림 재돌파",
@@ -86,6 +76,7 @@ public sealed class BotSettingsViewModel : ViewModelBase
 
     private void Ok()
     {
+        S.Mode = BotMode.FullAuto; // 종목은 자동 운용이 고르고, 진입·청산도 봇이 스스로 한다
         var errors = S.Validate();
         if (errors.Count > 0)
         {
@@ -93,9 +84,9 @@ public sealed class BotSettingsViewModel : ViewModelBase
             return;
         }
         UpdateCostHint();
-        if (S.Mode == BotMode.FullAuto && _app.Execution == ExecutionMode.Live && CostHint.StartsWith('⚠'))
+        if (_app.Execution == ExecutionMode.Live && CostHint.StartsWith('⚠'))
         {
-            var r = DXMessageBox.Show(CostHint + "\n\n실전 완전자동으로 계속할까요?", "비용 가드", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+            var r = DXMessageBox.Show(CostHint + "\n\n실전 주문으로 계속할까요?", "비용 가드", MessageBoxButton.YesNo, MessageBoxImage.Warning);
             if (r != MessageBoxResult.Yes) return;
         }
         Result = S.Clone();
@@ -115,6 +106,7 @@ public sealed class SettingsViewModel : ViewModelBase
         ConnectionResult = "";
         TestConnectionCommand = new AsyncCommand(TestConnectionAsync);
         ResetPresetsCommand = new DelegateCommand(ResetPresets);
+        EditPresetCommand = new DelegateCommand<string>(EditPreset);
         ResetPaperAccountCommand = new DelegateCommand(ResetPaperAccount, () => !EngineRunning);
         SaveCommand = new DelegateCommand(Save);
         CancelCommand = new DelegateCommand(() => RequestClose?.Invoke(false));
@@ -125,6 +117,38 @@ public sealed class SettingsViewModel : ViewModelBase
     public AppSettings Settings { get; }
     public bool EngineRunning { get; }
     public IReadOnlyList<string> PresetNames => Settings.Presets.Keys.ToList();
+
+    /// <summary>자동 운용이 쓰는 프리셋 편집 (파라미터: Morning / Day / Closing)</summary>
+    public DelegateCommand<string> EditPresetCommand { get; }
+
+    private void EditPreset(string which)
+    {
+        var name = which switch
+        {
+            "Morning" => Settings.AutoPilot.MorningPreset,
+            "Day" => Settings.AutoPilot.DayPreset,
+            _ => Settings.AutoPilot.ClosingPreset,
+        };
+        if (!Settings.Presets.TryGetValue(name, out var preset))
+        {
+            DXMessageBox.Show($"프리셋 '{name}' 이 없습니다.", "프리셋 편집");
+            return;
+        }
+        var vm = new BotSettingsViewModel(preset.Clone(), $"프리셋 편집 — {name}", Settings, isEdit: true);
+        var dlg = new Views.BotSettingsWindow(vm) { Owner = Application.Current.Windows.OfType<Views.SettingsWindow>().FirstOrDefault() };
+        if (dlg.ShowDialog() != true) return;
+        if (which == "Closing" && vm.Result.Strategy != EntryStrategyKind.ClosingBet)
+        {
+            DXMessageBox.Show("종가 프리셋의 전략은 '종가베팅'이어야 합니다.", "프리셋 편집", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        if (which != "Closing" && vm.Result.Strategy == EntryStrategyKind.ClosingBet)
+        {
+            DXMessageBox.Show("단타 프리셋에는 '종가베팅' 전략을 쓸 수 없습니다.", "프리셋 편집", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        Settings.Presets[name] = vm.Result; // [저장]을 눌러야 파일에 반영된다
+    }
     public bool HasSavedSecret => !string.IsNullOrEmpty(Settings.TossClientSecretProtected);
 
     /// <summary>새로 입력한 Secret (비어 있으면 기존 저장값 유지)</summary>

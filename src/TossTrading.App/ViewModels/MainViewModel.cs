@@ -25,28 +25,18 @@ public sealed class MainViewModel : ViewModelBase
         Execution = Settings.Execution;
         Status = "중지됨 — [시작]을 눌러 주세요";
         ChartTitle = "차트: 종목을 선택하세요";
-        SelectedPreset = PresetNames.FirstOrDefault();
-        ScannerMode = Settings.Scanner.Mode;
         AutoPilotEnabled = Settings.AutoPilot.Enabled;
 
         StartCommand = new AsyncCommand(StartAsync);
         StopCommand = new AsyncCommand(StopAsync);
-        AddSelectedCandidateCommand = new AsyncCommand(AddSelectedCandidateAsync);
-        AddManualSymbolCommand = new AsyncCommand(AddManualSymbolAsync);
-        StartBotCommand = new AsyncCommand(() => BotCommand(id => Engine!.StartBotAsync(id)));
-        ManualBuyCommand = new AsyncCommand(() => BotCommand(id => Engine!.ManualBuyAsync(id)));
-        ApproveCommand = new AsyncCommand(() => BotCommand(id => Engine!.ApproveSignalAsync(id)));
-        RejectCommand = new AsyncCommand(() => BotCommand(id => Engine!.RejectSignalAsync(id)));
         FlattenCommand = new AsyncCommand(() => BotCommand(id => Engine!.FlattenBotAsync(id)));
         StopBotCommand = new AsyncCommand(() => BotCommand(id => Engine!.StopBotAsync(id, flatten: true)));
-        RemoveBotCommand = new AsyncCommand(() => BotCommand(id => Engine!.RemoveBotAsync(id)));
         EditBotCommand = new AsyncCommand(EditBotAsync);
         KillSwitchCommand = new AsyncCommand(KillSwitchAsync);
         ResetKillSwitchCommand = new AsyncCommand(() => Engine is null ? Task.CompletedTask : Run(() => Engine.ResetKillSwitchAsync()));
         OpenSettingsCommand = new AsyncCommand(OpenSettingsAsync);
         OpenAnalysisCommand = new DelegateCommand(OpenAnalysis);
         OpenBacktestCommand = new DelegateCommand(OpenBacktest);
-        SaveAsPresetCommand = new DelegateCommand(SaveAsPreset);
 
         _timer = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromMilliseconds(300) };
         _timer.Tick += (_, _) => Refresh();
@@ -72,33 +62,8 @@ public sealed class MainViewModel : ViewModelBase
         new EnumOption<ExecutionMode>(ExecutionMode.Live, "실전 주문 (Live)"),
     };
 
-    public IReadOnlyList<string> PresetNames => Settings.Presets.Keys.ToList();
-
-    public IReadOnlyList<EnumOption<ScanMode>> ScanModeOptions { get; } = new[]
-    {
-        new EnumOption<ScanMode>(ScanMode.DayTrading, "단타 (Stocks in Play)"),
-        new EnumOption<ScanMode>(ScanMode.ClosingBet, "종가매매 후보"),
-    };
-
-    private const string ClosingPresetName = "종가베팅 (익일 매도)";
-
-    /// <summary>스캐너 모드. 바꾸면 즉시 엔진 스캐너에 반영하고, 봇 추가 프리셋도 맞춰 바꾼다.</summary>
-    public ScanMode ScannerMode
-    {
-        get => GetValue<ScanMode>();
-        set => SetValue(value, () =>
-        {
-            Settings.Scanner.Mode = value;
-            SettingsStore.Save(Settings);
-            Engine?.UpdateScanner(Settings.Scanner.Clone());
-            RaiseScanModeChanged();
-            if (value == ScanMode.ClosingBet && Settings.Presets.ContainsKey(ClosingPresetName)) SelectedPreset = ClosingPresetName;
-            else if (value == ScanMode.DayTrading && SelectedPreset == ClosingPresetName) SelectedPreset = PresetNames.FirstOrDefault();
-        });
-    }
-
-    /// <summary>화면에 보이는 스캐너 모드. 자동 운용 중에는 엔진이 시간대에 맞춰 바꾼 모드를 따른다.</summary>
-    public bool IsClosingMode => (AutoPilotEnabled && _engineScanMode is { } m ? m : ScannerMode) == ScanMode.ClosingBet;
+    /// <summary>스캐너 모드는 엔진이 시간대에 맞춰 바꾼다 (09:00~ 단타 후보, 14:40~ 종가매매 후보)</summary>
+    public bool IsClosingMode => _engineScanMode == ScanMode.ClosingBet;
 
     private ScanMode? _engineScanMode;
 
@@ -111,14 +76,10 @@ public sealed class MainViewModel : ViewModelBase
         {
             Settings.AutoPilot.Enabled = value;
             SettingsStore.Save(Settings);
-            RaisePropertyChanged(nameof(CanChangeScanMode));
-            RaiseScanModeChanged();
             if (Engine is not null) _ = Run(() => Engine.SetAutoPilotAsync(Settings.AutoPilotPlan()));
-            if (!value) AutoPilotStatus = "";
         });
     }
 
-    public bool CanChangeScanMode => !AutoPilotEnabled;
     public string AutoPilotStatus { get => GetValue<string>(); private set => SetValue(value); }
 
     private void RaiseScanModeChanged()
@@ -130,8 +91,8 @@ public sealed class MainViewModel : ViewModelBase
     public bool IsDayMode => !IsClosingMode;
 
     public string ScannerHeader => IsClosingMode
-        ? "스캐너 — 종가매매 후보 (봇 매수 조건 기준 평가 · 조건 모두 통과 종목이 위로)"
-        : "스캐너 — Stocks in Play (거래대금·RVOL·등락률·틱비용·경고 필터)";
+        ? "자동 선정 후보 — 종가매매 (조건 모두 통과 종목을 🤖 자동 운용이 선정)"
+        : "자동 선정 후보 — 단타 (거래대금·RVOL·등락률 상위, 점수순으로 🤖 자동 운용이 선정)";
 
     // ---------------------------------------------------------------- 상태 속성
     public bool IsRunning
@@ -178,8 +139,6 @@ public sealed class MainViewModel : ViewModelBase
     }
 
     public bool HasSelectedBot => SelectedBot is not null;
-    public string? SelectedPreset { get => GetValue<string?>(); set => SetValue(value); }
-    public string ManualSymbol { get => GetValue<string>() ?? ""; set => SetValue(value); }
     public ChartView? Chart { get => GetValue<ChartView?>(); private set => SetValue(value); }
     public string ChartTitle { get => GetValue<string>(); private set => SetValue(value); }
 
@@ -188,20 +147,12 @@ public sealed class MainViewModel : ViewModelBase
     public DelegateCommand OpenAnalysisCommand { get; }
     public DelegateCommand OpenBacktestCommand { get; }
     public AsyncCommand StopCommand { get; }
-    public AsyncCommand AddSelectedCandidateCommand { get; }
-    public AsyncCommand AddManualSymbolCommand { get; }
-    public AsyncCommand StartBotCommand { get; }
-    public AsyncCommand ManualBuyCommand { get; }
-    public AsyncCommand ApproveCommand { get; }
-    public AsyncCommand RejectCommand { get; }
     public AsyncCommand FlattenCommand { get; }
     public AsyncCommand StopBotCommand { get; }
-    public AsyncCommand RemoveBotCommand { get; }
     public AsyncCommand EditBotCommand { get; }
     public AsyncCommand KillSwitchCommand { get; }
     public AsyncCommand ResetKillSwitchCommand { get; }
     public AsyncCommand OpenSettingsCommand { get; }
-    public DelegateCommand SaveAsPresetCommand { get; }
 
     private TradingEngine? Engine => _host.Engine;
 
@@ -285,34 +236,6 @@ public sealed class MainViewModel : ViewModelBase
 
     // ================================================================ 봇 명령
 
-    private async Task AddSelectedCandidateAsync()
-    {
-        if (SelectedCandidate is not { } c) { DXMessageBox.Show("스캐너에서 종목을 선택하세요."); return; }
-        await AddBotAsync(c.Symbol, c.Name, c.Price);
-    }
-
-    private async Task AddManualSymbolAsync()
-    {
-        var sym = ManualSymbol.Trim().ToUpperInvariant();
-        if (sym.Length == 0) return;
-        await AddBotAsync(sym, null, 10_000m);
-        ManualSymbol = "";
-    }
-
-    private async Task AddBotAsync(string symbol, string? name, decimal referencePrice)
-    {
-        if (Engine is null) { DXMessageBox.Show("먼저 엔진을 시작하세요."); return; }
-        var preset = SelectedPreset is not null && Settings.Presets.TryGetValue(SelectedPreset, out var p) ? p.Clone() : new BotSettings();
-        var vm = new BotSettingsViewModel(preset, $"{name ?? symbol} ({symbol}) 봇 설정", Settings, referencePrice: referencePrice);
-        var dlg = new BotSettingsWindow(vm) { Owner = Application.Current.MainWindow };
-        if (dlg.ShowDialog() != true) return;
-        await Run(async () =>
-        {
-            var id = await Engine.AddBotAsync(symbol, name, vm.Result);
-            if (vm.StartImmediately) await Engine.StartBotAsync(id);
-        });
-    }
-
     private async Task EditBotAsync()
     {
         if (SelectedBot is null || Engine is null) return;
@@ -356,23 +279,12 @@ public sealed class MainViewModel : ViewModelBase
         if (dlg.ShowDialog() != true) return;
         Settings = vm.Settings;
         SettingsStore.Save(Settings);
-        RaisePropertyChanged(nameof(PresetNames));
         if (Engine is not null)
         {
             await Run(() => Engine.UpdateRiskAsync(Settings.Risk.Clone()));
             Engine.UpdateScanner(Settings.Scanner.Clone());
             await Run(() => Engine.SetAutoPilotAsync(Settings.AutoPilotPlan()));
         }
-    }
-
-    private void SaveAsPreset()
-    {
-        if (SelectedBot is null) return;
-        var name = $"{SelectedBot.Strategy} {DateTime.Now:MMdd-HHmm}";
-        Settings.Presets[name] = SelectedBot.Settings.Clone();
-        SettingsStore.Save(Settings);
-        RaisePropertyChanged(nameof(PresetNames));
-        SelectedPreset = name;
     }
 
     private Task BotCommand(Func<string, Task> action) =>
@@ -419,7 +331,7 @@ public sealed class MainViewModel : ViewModelBase
 
         if (s.AutoPilot is { } ap)
         {
-            AutoPilotStatus = ap.Enabled ? $"🤖 {ap.Phase} · {ap.Status}" : "";
+            AutoPilotStatus = ap.Enabled ? $"🤖 {ap.Phase} · {ap.Status}" : "🤖 꺼짐 · 새 종목 선정 중지 (보유 종목은 계속 관리)";
             if (_engineScanMode != ap.ScanMode)
             {
                 _engineScanMode = ap.ScanMode;

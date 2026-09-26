@@ -40,10 +40,13 @@
                     <dxe:TextEdit Margin="3" EditValue="{Binding ExtraSymbols, UpdateSourceTrigger=PropertyChanged}"
                                   NullText="(선택) 예) 005930, 000660 — 토스 데이터는 코스피·코스닥 전체 종목이 대상이라 보통 비워 두면 됩니다" />
                 </DockPanel>
-                <DockPanel Margin="0,4,0,0">
-                    <dxe:ProgressBarEdit DockPanel.Dock="Left" Width="260" Height="16" Margin="4,0" Minimum="0" Maximum="100" EditValue="{Binding Progress, Mode=OneWay}" />
-                    <TextBlock Text="{Binding ProgressText}" VerticalAlignment="Center" Margin="6,0" TextTrimming="CharacterEllipsis" />
-                </DockPanel>
+                <Grid Margin="4,6,4,0">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                    <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
+                    <dxe:ProgressBarEdit Grid.Row="0" Grid.Column="0" Height="18" Minimum="0" Maximum="100" EditValue="{Binding Progress, Mode=OneWay}" />
+                    <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding ProgressSummary}" FontWeight="SemiBold" Margin="10,0,0,0" VerticalAlignment="Center" />
+                    <TextBlock Grid.Row="1" Grid.ColumnSpan="2" Text="{Binding ProgressText}" Margin="0,3,0,0" Foreground="{StaticResource SubText}" TextTrimming="CharacterEllipsis" />
+                </Grid>
             </StackPanel>
         </GroupBox>
 

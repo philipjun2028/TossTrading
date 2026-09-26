@@ -77,11 +77,9 @@ public sealed class AutoPilot
         _lastTick = default;
         if (wasEnabled && !Enabled)
         {
-            _appliedMode = null;
-            _host.SetScanMode(null);
             Phase = "꺼짐";
-            Status = "자동 운용 중지 — 자동 봇은 각자 규칙대로 계속 관리됩니다";
-            _host.Log(LogLevel.Warn, "자동 운용 꺼짐 (이미 만든 봇은 그대로 둡니다)");
+            Status = "새 종목 선정 중지 — 보유 종목은 각 봇이 계속 관리합니다";
+            _host.Log(LogLevel.Warn, "자동 운용 꺼짐 (새 종목을 고르지 않음, 이미 만든 봇은 규칙대로 관리)");
         }
         else if (!wasEnabled && Enabled)
         {
@@ -89,12 +87,26 @@ public sealed class AutoPilot
         }
     }
 
+    /// <summary>
+    /// 매 타이머 호출. 꺼져 있어도 스캐너 모드는 시간대에 맞추고 끝난 봇은 정리한다
+    /// (종목을 직접 고르는 기능이 없으므로 화면에 남은 봇을 사람이 지울 필요가 없게).
+    /// </summary>
     public void OnTimer()
     {
-        if (!Enabled) return;
         var now = _host.Now;
         if (_lastTick != default && now - _lastTick < TickInterval && now >= _lastTick) return;
         _lastTick = now;
+
+        if (!Enabled)
+        {
+            var tt = Kst.TimeOf(now);
+            var ps = Plan.Settings;
+            ApplyScanMode(ps.ClosingEnabled && tt >= ps.ClosingScanTime && tt < SessionEnd ? ScanMode.ClosingBet : ScanMode.DayTrading);
+            Cleanup(now, tt);
+            Phase = "꺼짐";
+            Status = "새 종목 선정 중지 — 보유 종목은 각 봇이 계속 관리합니다";
+            return;
+        }
 
         var today = Kst.DateOf(now);
         if (today != _date)
@@ -261,10 +273,10 @@ public sealed class AutoPilot
 
     // ------------------------------------------------------------------ 공통
 
-    /// <summary>끝난 봇, 재시작 후 대기 상태로 남은 봇, 진입 못 한 종가 봇(마감 후)을 목록에서 뺀다.</summary>
+    /// <summary>끝난 봇, 재시작 후 대기 상태로 남은 봇, 진입 못 한 종가 봇(마감 후)을 목록에서 뺀다 (보유·미체결 없는 것만).</summary>
     private void Cleanup(DateTimeOffset now, TimeOnly t)
     {
-        foreach (var bot in _host.Bots.Where(b => b.AutoRole is not null).ToList())
+        foreach (var bot in _host.Bots.ToList())
         {
             if (bot.HasPosition || bot.HasWorkingOrders) continue;
             var closingMissed = bot.AutoRole == ClosingRole && bot.Entries == 0 && t >= BotSettings.MarketCloseAuction;

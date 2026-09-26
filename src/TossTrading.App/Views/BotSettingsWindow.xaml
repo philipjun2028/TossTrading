@@ -10,8 +10,6 @@
         <StackPanel DockPanel.Dock="Bottom" Margin="0,8,0,0">
             <TextBlock Text="{Binding CostHint}" Foreground="{StaticResource Warn}" TextWrapping="Wrap" Margin="4" />
             <DockPanel>
-                <dxe:CheckEdit DockPanel.Dock="Left" Content="추가 후 바로 시작" IsChecked="{Binding StartImmediately}"
-                               Visibility="{Binding ShowStartOption, Converter={StaticResource BoolToVis}}" />
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                     <Button Content="비용 점검" Command="{Binding UpdateCostHintCommand}" Margin="3" Padding="12,4" />
                     <Button Content="취소" Command="{Binding CancelCommand}" IsCancel="True" Margin="3" Padding="12,4" />
@@ -26,10 +24,9 @@
                 <Grid>
                     <Grid.ColumnDefinitions><ColumnDefinition Width="190" /><ColumnDefinition Width="*" /><ColumnDefinition Width="190" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
                     <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
-                    <TextBlock Grid.Row="0" Grid.Column="0" Text="운용 모드" Style="{StaticResource Label}" />
-                    <ContentControl Grid.Row="0" Grid.Column="1" Margin="3"><dxe:ComboBoxEdit IsTextEditable="False" ItemsSource="{Binding ModeOptions}" DisplayMember="Label" ValueMember="Value" EditValue="{Binding S.Mode}" /></ContentControl>
-                    <TextBlock Grid.Row="0" Grid.Column="2" Text="진입 전략" Style="{StaticResource Label}" />
-                    <ContentControl Grid.Row="0" Grid.Column="3" Margin="3"><dxe:ComboBoxEdit IsTextEditable="False" ItemsSource="{Binding StrategyOptions}" DisplayMember="Label" ValueMember="Value" EditValue="{Binding S.Strategy}" /></ContentControl>
+                    <TextBlock Grid.Row="0" Grid.Column="0" Text="진입 전략" Style="{StaticResource Label}" />
+                    <ContentControl Grid.Row="0" Grid.Column="1" Margin="3"><dxe:ComboBoxEdit IsTextEditable="False" ItemsSource="{Binding StrategyOptions}" DisplayMember="Label" ValueMember="Value" EditValue="{Binding S.Strategy}" /></ContentControl>
+                    <TextBlock Grid.Row="0" Grid.Column="2" Grid.ColumnSpan="2" Text="완전자동 — 신호가 나오면 봇이 바로 매수하고 규칙대로 청산" Style="{StaticResource Label}" Foreground="{StaticResource SubText}" />
                     <TextBlock Grid.Row="1" Grid.Column="0" Text="진입 허용 시작 (HH:mm)" Style="{StaticResource Label}" />
                     <ContentControl Grid.Row="1" Grid.Column="1" Margin="3"><dxe:TextEdit EditValue="{Binding S.EntryStartTime, Converter={StaticResource TimeOnlyConv}}" MaskType="RegEx" Mask="([01][0-9]|2[0-3]):[0-5][0-9]" /></ContentControl>
                     <TextBlock Grid.Row="1" Grid.Column="2" Text="진입 허용 종료 (HH:mm)" Style="{StaticResource Label}" />
