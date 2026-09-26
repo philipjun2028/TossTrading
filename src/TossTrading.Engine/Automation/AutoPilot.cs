@@ -291,7 +291,7 @@ public sealed class AutoPilot
         if (perStock <= 0) return;
         var picks = _host.Candidates
             .Where(c => c.ClosingTotal > 0)                                  // 종가 모드 스캔 결과만
-            .Where(c => c.ChangePct is >= 0m and < 28m)
+            .Where(c => c.ChangePct >= 0m && c.ChangePct < Plan.Settings.OvernightMaxChangePct)
             .Where(c => !(c.ChangePct > 8m && c.RangePosition is < 0.3m))
             .OrderByDescending(c => c.TradingAmount);
         foreach (var c in picks)

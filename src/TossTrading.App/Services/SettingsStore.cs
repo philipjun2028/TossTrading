@@ -119,7 +119,7 @@ public static class SettingsStore
     /// <summary>
     /// 종목 자동 선정으로 바뀐 뒤: 수동 진입 전용 프리셋은 쓸 곳이 없어 지우고, 나머지는 완전자동으로 맞춘다.
     /// </summary>
-    public const int CurrentVersion = 4;
+    public const int CurrentVersion = 5;
 
     public static void MigratePresets(AppSettings s)
     {
@@ -174,6 +174,12 @@ public static class SettingsStore
             if (s.Presets.TryGetValue("종가베팅 (익일 매도)", out var cb) && cb.NextDayExitMode == NextDayExitMode.Managed)
                 cb.NextDayExitMode = NextDayExitMode.AtOpen; // 연구: 다음 날 장중 보유는 손실, 시가 매도가 유리
             s.SettingsVersion = 4;
+        }
+        if (s.SettingsVersion < 5)
+        {
+            // v5: 장중 프리셋 "VWAP 추세 눌림" 기본 사용 (끄여 있던 경우만)
+            if (s.AutoPilot.DayPreset == AutoPilotSettings.NoPreset) s.AutoPilot.DayPreset = BotPresets.VwapTrend;
+            s.SettingsVersion = 5;
         }
         foreach (var name in s.Presets.Where(kv => kv.Value.Strategy == EntryStrategyKind.Manual).Select(kv => kv.Key).ToList())
             s.Presets.Remove(name);

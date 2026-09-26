@@ -328,10 +328,10 @@ public sealed class AutoPilotSettings
     public string MorningPreset { get; set; } = "ORB 표준";
 
     /// <summary>
-    /// 오전 이후 단타 프리셋. 기본 "사용 안 함": VWAP 눌림은 2026-01~09 토스 백테스트에서
-    /// 상·하반기 모두 Profit Factor 0.3 대로 손실이 커서 기본으로 끔.
+    /// 오전 이후 단타 프리셋. 기본 "VWAP 추세 눌림"(09:30~11:00, 거래량 2배·20일선 위 필터, 손절 3%·익절 10%).
+    /// 필터 없는 "VWAP 눌림 표준"은 백테스트에서 큰 손실(PF 0.3~0.8)이라 쓰지 않는다.
     /// </summary>
-    public string DayPreset { get; set; } = NoPreset;
+    public string DayPreset { get; set; } = BotPresets.VwapTrend;
 
     /// <summary>프리셋 "사용 안 함" 표시값</summary>
     public const string NoPreset = "(사용 안 함)";
@@ -350,6 +350,11 @@ public sealed class AutoPilotSettings
 
     /// <summary>오버나잇 바스켓에 쓰는 계좌 비중 % (종목 수로 나눠 종목당 투입금)</summary>
     public decimal ClosingCapitalPct { get; set; } = 60m;
+
+    /// <summary>
+    /// 오버나잇 후보 등락률 상한 %. 토스 백테스트(2026-01~09): +20% 이상 종목은 거래당 −0.46%, 최악 −16% (익일 갭하락 꼬리 위험)
+    /// </summary>
+    public decimal OvernightMaxChangePct { get; set; } = 20m;
 
     /// <summary>종가 후보 조건 최소 통과 수 (0 = 전부 통과)</summary>
     public int ClosingMinPassed { get; set; }

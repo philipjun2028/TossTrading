@@ -97,9 +97,10 @@ public class AutoPilotTests
     [Fact]
     public void NoDayPresetMeansNoNewBotsAfterMorning()
     {
+        _ap.UpdatePlan(AutoPilotPlan.FromPresets(new AutoPilotSettings { Enabled = true, DayPreset = AutoPilotSettings.NoPreset }, BotPresets.CreateDefaults()));
         At(10, 30);
         _host.CandidateList = new() { Day("A", 80) };
-        _ap.OnTimer();                                                              // 기본: 장중 프리셋 "사용 안 함"
+        _ap.OnTimer();                                                              // 장중 프리셋 "사용 안 함"
         Assert.Empty(_host.BotList);
     }
 
