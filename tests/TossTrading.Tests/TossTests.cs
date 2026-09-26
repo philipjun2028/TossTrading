@@ -136,6 +136,51 @@ public class TossRestClientTests
         Assert.Contains("허용 IP", ex.Message);
     }
 
+    private static HttpResponseMessage Gzip(string json, HttpStatusCode status)
+    {
+        using var ms = new MemoryStream();
+        using (var gz = new System.IO.Compression.GZipStream(ms, System.IO.Compression.CompressionLevel.Fastest, leaveOpen: true))
+            gz.Write(Encoding.UTF8.GetBytes(json));
+        var content = new ByteArrayContent(ms.ToArray());
+        content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/json");
+        content.Headers.ContentEncoding.Add("gzip");
+        return new HttpResponseMessage(status) { Content = content };
+    }
+
+    [Fact]
+    public async Task GzipErrorBodyIsDecodedNotGarbled()
+    {
+        var (client, handler) = Create();
+        handler.Respond = _ => Gzip("""{"error":"invalid_client","error_description":"클라이언트 인증 실패"}""", HttpStatusCode.Unauthorized);
+        var ex = await Assert.ThrowsAsync<TossApiException>(() => client.GetPricesAsync(new[] { "005930" }, TestContext.Current.CancellationToken));
+        Assert.Equal("invalid_client", ex.Code);
+        Assert.Contains("클라이언트 인증 실패", ex.Message);
+        Assert.Contains("Client ID/Secret", ex.Message);
+        Assert.DoesNotContain("\uFFFD", ex.Message);
+    }
+
+    [Fact]
+    public async Task TokenFallsBackToBasicAuthAndTrimsSecret()
+    {
+        var handler = new FakeHandler();
+        var options = new TossOptions { ClientId = " id ", ClientSecret = "secret\r\n", BaseUrl = "https://example.test" };
+        var client = new TossRestClient(options, new HttpClient(handler));
+        handler.Respond = req =>
+        {
+            if (req.RequestUri!.AbsolutePath != "/oauth2/token") return FakeHandler.Json("""{"result":[]}""");
+            return req.Headers.Authorization?.Scheme == "Basic"
+                ? FakeHandler.Json("""{"access_token":"tok-basic","expires_in":3600}""")
+                : FakeHandler.Json("""{"error":"invalid_client"}""", HttpStatusCode.Unauthorized);
+        };
+
+        var token = await client.Tokens.GetTokenAsync(TestContext.Current.CancellationToken);
+        Assert.Equal("tok-basic", token);
+        Assert.Equal("grant_type=client_credentials&client_id=id&client_secret=secret", handler.Requests[0].Body);
+        var basic = handler.Requests[1].Request.Headers.Authorization!;
+        Assert.Equal("id:secret", Encoding.UTF8.GetString(Convert.FromBase64String(basic.Parameter!)));
+        Assert.Equal("grant_type=client_credentials", handler.Requests[1].Body);
+    }
+
     [Fact]
     public async Task HoldingsAndOrdersMapToDomain()
     {

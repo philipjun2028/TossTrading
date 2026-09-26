@@ -47,28 +47,30 @@ public sealed class TossTokenProvider
             if (_token is not null && DateTimeOffset.UtcNow < _expiresAt - RefreshMargin) return _token;
 
             var issuedAt = DateTimeOffset.UtcNow;
-            using var req = new HttpRequestMessage(HttpMethod.Post, _options.BaseUrl.TrimEnd('/') + "/oauth2/token")
-            {
-                Content = new FormUrlEncodedContent(new Dictionary<string, string>
-                {
-                    ["grant_type"] = "client_credentials",
-                    ["client_id"] = _options.ClientId,
-                    ["client_secret"] = _options.ClientSecret,
-                }),
-            };
-            req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-            using var resp = await _http.SendAsync(req, ct).ConfigureAwait(false);
-            var body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-            TokenResponse? tr = null;
-            try { tr = JsonSerializer.Deserialize<TokenResponse>(body, TossJson.Options); } catch (JsonException) { }
+            var clientId = _options.ClientId.Trim();
+            var secret = _options.ClientSecret.Trim(); // 복사할 때 딸려온 공백·줄바꿈 제거
 
-            if (!resp.IsSuccessStatusCode || tr?.AccessToken is null)
+            // 1차: 폼 본문에 client_id/secret (client_secret_post, 비공식 SDK 방식)
+            // 2차: 401/400 이면 HTTP Basic 인증 헤더 (client_secret_basic) 로 한 번 더 시도
+            var (status, body, tr) = await RequestTokenAsync(clientId, secret, useBasic: _useBasic, ct).ConfigureAwait(false);
+            if (!_useBasic && status is HttpStatusCode.Unauthorized or HttpStatusCode.BadRequest && tr?.AccessToken is null)
+            {
+                var retry = await RequestTokenAsync(clientId, secret, useBasic: true, ct).ConfigureAwait(false);
+                if (retry.Tr?.AccessToken is not null) { _useBasic = true; (status, body, tr) = retry; }
+            }
+
+            if (status is < HttpStatusCode.OK or >= HttpStatusCode.MultipleChoices || tr?.AccessToken is null)
             {
                 var code = tr?.Error ?? "token-error";
                 var desc = tr?.ErrorDescription ?? Truncate(body);
-                if (resp.StatusCode == HttpStatusCode.Forbidden)
-                    desc += " (허용 IP 미등록 가능성: 토스증권 WTS → 설정 → Open API → 허용 IP 관리)";
-                throw new TossApiException(resp.StatusCode, code, desc, null, null);
+                desc += status switch
+                {
+                    HttpStatusCode.Unauthorized or HttpStatusCode.BadRequest =>
+                        " → Client ID/Secret 이 맞지 않습니다. 토스증권 WTS → 설정 → Open API 에서 값을 다시 복사하세요 (Secret 을 재발급하면 이전 값은 무효).",
+                    HttpStatusCode.Forbidden => " → 허용 IP 미등록 가능성: 토스증권 WTS → 설정 → Open API → 허용 IP 관리에 이 PC 공인 IP 등록",
+                    _ => "",
+                };
+                throw new TossApiException(status, code, desc, null, null);
             }
 
             _token = tr.AccessToken;
@@ -79,6 +81,33 @@ public sealed class TossTokenProvider
         {
             _mutex.Release();
         }
+    }
+
+    private bool _useBasic;
+
+    private async Task<(HttpStatusCode Status, string Body, TokenResponse? Tr)> RequestTokenAsync(
+        string clientId, string secret, bool useBasic, CancellationToken ct)
+    {
+        var form = new Dictionary<string, string> { ["grant_type"] = "client_credentials" };
+        if (!useBasic)
+        {
+            form["client_id"] = clientId;
+            form["client_secret"] = secret;
+        }
+        using var req = new HttpRequestMessage(HttpMethod.Post, _options.BaseUrl.TrimEnd('/') + "/oauth2/token")
+        {
+            Content = new FormUrlEncodedContent(form),
+        };
+        req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+        if (useBasic)
+            req.Headers.Authorization = new AuthenticationHeaderValue("Basic",
+                Convert.ToBase64String(Encoding.UTF8.GetBytes($"{Uri.EscapeDataString(clientId)}:{Uri.EscapeDataString(secret)}")));
+
+        using var resp = await _http.SendAsync(req, ct).ConfigureAwait(false);
+        var body = await TossHttp.ReadBodyAsync(resp, ct).ConfigureAwait(false);
+        TokenResponse? tr = null;
+        try { tr = JsonSerializer.Deserialize<TokenResponse>(body, TossJson.Options); } catch (JsonException) { }
+        return (resp.StatusCode, body, tr);
     }
 
     public void Invalidate(string stale)
@@ -107,7 +136,7 @@ public sealed class TossRestClient : IDisposable
     {
         _options = options;
         _ownsHttp = http is null;
-        _http = http ?? new HttpClient { Timeout = options.HttpTimeout };
+        _http = http ?? TossHttp.CreateClient(options.HttpTimeout);
         Tokens = new TossTokenProvider(options, _http);
         _gates = new Dictionary<RateGroup, RateGate>
         {
@@ -224,7 +253,7 @@ public sealed class TossRestClient : IDisposable
 
             using var resp = await _http.SendAsync(req, ct).ConfigureAwait(false);
             LearnRateLimit(group, resp);
-            var text = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            var text = await TossHttp.ReadBodyAsync(resp, ct).ConfigureAwait(false);
 
             if (resp.IsSuccessStatusCode)
             {
