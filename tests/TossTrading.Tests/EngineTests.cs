@@ -382,6 +382,43 @@ public class EntrySignalTests
         if (fired is not null) Assert.Equal((decimal)mult, fired.SizeMultiplier);
     }
 
+    [Theory]
+    [InlineData(9_000, 1.5)]   // 전일 종가 9,700 > 20일선 9,000 + 거래량 급증 → B등급이어도 1.5배
+    [InlineData(10_000, 1.0)]  // 20일선 아래 → 확대 없음
+    public void OrbSizesUpOnTrendAndVolume(int ma20, double mult)
+    {
+        var (ctx, t) = OrbSetup(9_700, 10_000, 10_100);    // 범위 1% → A등급 아님
+        ctx.DailyMa20 = ma20;
+        var sig = new OpeningRangeBreakoutSignal();
+        var s = new BotSettings { OrbMinutes = 5 };
+        ctx.OnTrade(new TradeTick("000001", 10_080, 500, t));
+        sig.Evaluate(ctx, t, s, SignalTrigger.Trade);
+        ctx.OnTrade(new TradeTick("000001", 10_150, 5_000, t.AddSeconds(5)));
+        var fired = sig.Evaluate(ctx, t.AddSeconds(5), s, SignalTrigger.Trade);
+        Assert.NotNull(fired);
+        Assert.Equal((decimal)mult, fired.SizeMultiplier);
+    }
+
+    [Theory]
+    [InlineData(false, 150, 0, true)]     // 기본 VWAP 눌림: 필터 없음
+    [InlineData(true, 300, 9_000, true)]  // 추세형: 거래량 3배 + 20일선 위
+    [InlineData(true, 150, 9_000, false)] // 거래량 1.5배 → 제외 (2배 미만)
+    [InlineData(true, 300, 9_600, false)] // 전일 종가 9,500 < 20일선 → 제외
+    [InlineData(true, 300, 0, false)]     // 20일선 모름 → 제외
+    public void VwapTrendPresetFiltersByVolumeAndMa20(bool trendPreset, int signalVolume, int ma20, bool fires)
+    {
+        var ctx = new SymbolContext("000001", "테스트") { PreviousClose = 9_500m, DailyMa20 = ma20 > 0 ? ma20 : null };
+        for (var m = 0; m < 10; m++) ctx.OnTrade(new TradeTick("000001", 10_000m, 100, Open.AddMinutes(30 + m)));
+        ctx.OnTrade(new TradeTick("000001", 10_300m, 100, Open.AddMinutes(40)));      // 상승 (고가 ≥ VWAP×1.02)
+        ctx.OnTrade(new TradeTick("000001", 10_020m, 100, Open.AddMinutes(41)));      // VWAP 까지 눌림
+        ctx.OnTrade(new TradeTick("000001", 10_100m, signalVolume, Open.AddMinutes(42))); // VWAP 위 + 직전봉 고가 돌파
+        var t = Open.AddMinutes(43);
+        ctx.OnTrade(new TradeTick("000001", 10_100m, 1, t));                           // 42분 봉 마감
+        var s = trendPreset ? BotPresets.CreateDefaults()[BotPresets.VwapTrend] : new BotSettings();
+        var sig = new VwapReclaimSignal().Evaluate(ctx, t, s, SignalTrigger.BarClosed);
+        Assert.Equal(fires, sig is not null);
+    }
+
     [Fact]
     public void OrbIgnoresReCrossWhenBreakoutHappenedBeforeBotStarted()
     {

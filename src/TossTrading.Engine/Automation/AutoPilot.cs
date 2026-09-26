@@ -50,6 +50,7 @@ public sealed class AutoPilot
     private readonly IAutoPilotHost _host;
     private readonly Dictionary<string, DateTimeOffset> _addedAt = new();
     private readonly HashSet<string> _usedDay = new();
+    private readonly HashSet<string> _usedMorning = new();  // 오전(ORB)에 쓴 종목 — 장중 프리셋은 따로 한 번 더 쓸 수 있다
     private readonly HashSet<string> _usedClosing = new();
     private readonly HashSet<string> _windingDown = new();
     private readonly Dictionary<string, int> _closingMisses = new();
@@ -116,6 +117,7 @@ public sealed class AutoPilot
         {
             _date = today;
             _usedDay.Clear();
+            _usedMorning.Clear();
             _usedClosing.Clear();
             _windingDown.Clear();
         }
@@ -183,9 +185,11 @@ public sealed class AutoPilot
             if (free <= 0) break;
             if (c.ClosingTotal > 0) continue;                 // 종가 모드 결과는 단타 대상 아님
             if (s.MinDayScore > 0 && c.Score < s.MinDayScore) continue;
-            if (_usedDay.Contains(c.Symbol) || HasBot(c.Symbol)) continue;
+            var morning = t < s.MorningUntil;
+            var used = morning ? _usedMorning : _usedDay;
+            if (used.Contains(c.Symbol) || HasBot(c.Symbol)) continue;
 
-            var preset = t < s.MorningUntil ? Plan.Morning : Plan.Day;
+            var preset = morning ? Plan.Morning : Plan.Day;
             if (preset is null) return;                       // 장중 프리셋 "사용 안 함" → 오전 이후 새 단타 없음
             var bs = preset.Clone();
             bs.Mode = BotMode.FullAuto;
@@ -199,7 +203,7 @@ public sealed class AutoPilot
             // ORB 는 하루 첫 돌파만 → 한 번 거래하면 봇을 끝내 다른 종목에 자리를 넘긴다
             if (bs.Strategy == EntryStrategyKind.OpeningRangeBreakout) bs.MaxEntries = 1;
 
-            _usedDay.Add(c.Symbol);
+            used.Add(c.Symbol);
             if (Add(c, bs, DayRole, $"단타 선정 (점수 {c.Score:0}, {c.ChangePct:+0.0;-0.0}%)")) free--;
         }
     }
@@ -321,7 +325,9 @@ public sealed class AutoPilot
         {
             if (bot.HasPosition || bot.HasWorkingOrders) continue;
             var closingMissed = bot.AutoRole == ClosingRole && bot.Entries == 0 && t >= BotSettings.MarketCloseAuction;
-            if (bot.State.IsFinished() || bot.State == BotState.Idle || closingMissed)
+            // 진입 시간이 끝났는데 진입 못 한 단타 봇 (예: 09:30 이 지난 ORB) → 자리를 장중 프리셋에 넘긴다
+            var dayExpired = bot.AutoRole == DayRole && bot.State == BotState.Watching && t >= bot.Settings.EntryEndTime;
+            if (bot.State.IsFinished() || bot.State == BotState.Idle || closingMissed || dayExpired)
             {
                 if (!bot.State.IsFinished()) bot.Stop(flatten: false);
                 Remove(bot);

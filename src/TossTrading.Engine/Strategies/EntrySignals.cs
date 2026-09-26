@@ -92,15 +92,20 @@ public sealed class OpeningRangeBreakoutSignal : IEntrySignal
         var avgVol = ctx.AverageBarVolume(10);
         var curVol = ctx.CurrentBar?.Volume ?? 0;
         var elapsed = Math.Max(0.1m, (decimal)(now - (ctx.CurrentBar?.Start ?? now)).TotalSeconds / 60m);
-        if (avgVol > 0 && curVol / Math.Min(elapsed, 1m) < avgVol * 1.2m) return null; // 거래량 동반
+        var volRatio = avgVol > 0 ? curVol / Math.Min(elapsed, 1m) / avgVol : 0m;
+        if (avgVol > 0 && volRatio < 1.2m) return null;     // 거래량 동반
 
         _brokenOn = today;
         // A등급: 범위 2~4%, 등락 +8% 이하, 장 시작 15분 안 돌파 (상·하반기 모두 거래당 +1.4% 이상)
         var minutes = (Kst.TimeOf(now) - Kst.MarketOpen).TotalMinutes;
         var gradeA = rangePct is >= 2m and <= 4m && changePct <= 8m && minutes <= 15;
-        var mult = gradeA && s.ConvictionSizing ? s.ConvictionMultiplier : 1m;
+        // 추세·거래량: 돌파 거래량 1.5배 이상 + 전일 종가가 20일선 위 (상·하반기 모두 +1.7% 이상)
+        var trend = s.ConvictionTrendVolume && volRatio >= s.ConvictionVolumeRatio
+                    && ctx.DailyMa20 is > 0 && ctx.PreviousClose.Value > ctx.DailyMa20.Value;
+        var mult = (gradeA || trend) && s.ConvictionSizing ? s.ConvictionMultiplier : 1m;
+        var grade = gradeA && trend ? " · A등급+추세" : gradeA ? " · A등급" : trend ? " · 추세·거래량" : "";
         return new EntrySignal(price, TickRules.AddTicks(lo, -1, ctx.Market),
-            $"ORB{s.OrbMinutes} 고가 {hi:N0} 돌파 (범위 {rangePct:F1}%, 등락 {changePct:+0.0}%){(gradeA ? " · A등급" : "")}", now, mult);
+            $"ORB{s.OrbMinutes} 고가 {hi:N0} 돌파 (범위 {rangePct:F1}%, 등락 {changePct:+0.0}%, 거래량 {volRatio:0.0}배){grade}", now, mult);
     }
 }
 
@@ -133,6 +138,16 @@ public sealed class VwapReclaimSignal : IEntrySignal
         var notExtended = b0.Close <= vwap * 1.02m;
         var strengthOk = ctx.Strength is null || ctx.Strength >= 100m;
         if (!(touched && reclaimed && notExtended && strengthOk)) return null;
+
+        // 추세형 필터 (프리셋 "VWAP 추세 눌림"): 거래량 동반 · 20일선 위 · 과열 아님
+        if (s.VwapMaxChangePct > 0 && (ctx.ChangeRate ?? 0) * 100m >= s.VwapMaxChangePct) return null;
+        if (s.VwapRequireAboveMa20 && !(ctx.DailyMa20 is > 0 && ctx.PreviousClose > ctx.DailyMa20)) return null;
+        if (s.VwapMinVolumeRatio > 0)
+        {
+            decimal sum = 0; var n = 0;
+            for (var i = 1; i <= 10 && ctx.ClosedBarFromEnd(i) is { } b; i++, n++) sum += b.Volume;
+            if (n < 5 || b0.Volume < sum / n * s.VwapMinVolumeRatio) return null;
+        }
 
         _lastFire = now;
         var stop = TickRules.AddTicks(Math.Min(b0.Low, b1.Low), -1, ctx.Market);

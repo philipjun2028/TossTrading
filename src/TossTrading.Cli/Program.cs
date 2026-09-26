@@ -14,6 +14,9 @@ var symbolsOpt = OptionValue(ref args, "--symbols");
 var cashOpt = OptionValue(ref args, "--cash");
 var pathOpt = OptionValue(ref args, "--path");
 var outOpt = OptionValue(ref args, "--out");
+var planOpt = new PlanOptions(
+    OptionValue(ref args, "--day-preset"), OptionValue(ref args, "--day-set"),
+    OptionValue(ref args, "--morning-set"), OptionValue(ref args, "--closing"), OptionValue(ref args, "--autopilot-set"));
 var cmd = args.FirstOrDefault()?.ToLowerInvariant();
 
 return cmd switch
@@ -22,7 +25,7 @@ return cmd switch
     "sim" => await SimAsync(args.Length > 1 ? int.Parse(args[1]) : 60, args.Length > 2 ? double.Parse(args[2]) : 60,
                             closing: args.Length > 3 && args[3].Equals("closing", StringComparison.OrdinalIgnoreCase), dataDir,
                             auto: args.Length > 3 && args[3].Equals("auto", StringComparison.OrdinalIgnoreCase)),
-    "backtest" => await BacktestAsync(args, dataDir, sourceOpt, symbolsOpt, cashOpt, pathOpt),
+    "backtest" => await BacktestAsync(args, dataDir, sourceOpt, symbolsOpt, cashOpt, pathOpt, planOpt),
     "export-data" => ExportData(dataDir, outOpt),
     "report" => Report(args.Length > 1 ? int.Parse(args[1]) : 30, dataDir, sourceOpt),
     _ => Usage(),
@@ -53,6 +56,8 @@ static int Usage()
                              과거 데이터로 자동 운용(단타→종가매매)을 재생해 거래내역·수익률·수익금 리포트
                              예) backtest 2026-08-01 2026-08-31 --source toss --cash 10000000
                              --source toss (TOSS_CLIENT_ID/SECRET 필요) | synthetic (가상 데이터, 기본)
+                             --day-preset "VWAP 눌림 표준" (장중 프리셋), --closing off (종가매매 끔)
+                             --day-set / --morning-set / --autopilot-set "StopLossPct=2,EntryEndTime=11:00" (설정 덮어쓰기, 실험용)
                              --symbols 005930,000660 (추가 종목), --path nearest (봉 내부: 시가에서 가까운 극값 먼저), 결과: <데이터폴더>\backtests\<실행시각>\
           export-data        과거 데이터 캐시(<데이터폴더>\history)를 연구용으로 압축 (--out <폴더>, 기본 <데이터폴더>\research_export)
                              backtest ... --source export:<폴더> 로 네트워크 없이 백테스트
@@ -172,7 +177,7 @@ static int ExportData(string? dataDir, string? outDir)
     return 0;
 }
 
-static async Task<int> BacktestAsync(string[] args, string? dataDir, string? source, string? symbols, string? cash, string? path)
+static async Task<int> BacktestAsync(string[] args, string? dataDir, string? source, string? symbols, string? cash, string? path, PlanOptions plan)
 {
     if (args.Length < 3 || !DateOnly.TryParse(args[1], out var from) || !DateOnly.TryParse(args[2], out var to))
     {
@@ -187,6 +192,7 @@ static async Task<int> BacktestAsync(string[] args, string? dataDir, string? sou
         ExtraSymbols = symbols?.Split(',', StringSplitOptions.RemoveEmptyEntries).ToList() ?? new(),
         IntrabarPath = path?.ToLowerInvariant() == "nearest" ? TossTrading.Engine.Backtest.IntrabarPath.NearestFirst : TossTrading.Engine.Backtest.IntrabarPath.Conservative,
         OutputDirectory = Path.Combine(dataDir, "backtests", $"{Kst.Now:yyyyMMdd_HHmmss}"),
+        Plan = plan.Build(),
     };
 
     TossConnection? conn = null;
@@ -278,4 +284,37 @@ static async Task<int> SimAsync(int seconds, double speed, bool closing, string?
         Console.WriteLine($"  {b.Name}({b.Symbol}) {b.Strategy} {b.StateText} 보유 {b.Quantity} 실현 {b.RealizedNet:N0} 진입 {b.Entries}/{b.MaxEntries}");
     Console.WriteLine($"  거래 {final.Trades.Count}건, 순손익 합계 {final.Trades.Sum(t => t.NetPnl):N0}원, 미실현 {final.Account.UnrealizedNet:N0}원, 평가 {final.Account.Equity:N0}원");
     return 0;
+}
+
+/// <summary>백테스트 실험용 자동 운용 설정 덮어쓰기</summary>
+sealed record PlanOptions(string? DayPreset, string? DaySet, string? MorningSet, string? Closing, string? AutoPilotSet)
+{
+    public AutoPilotPlan Build()
+    {
+        var a = new AutoPilotSettings { Enabled = true };
+        if (DayPreset is not null) a.DayPreset = DayPreset;
+        if (Closing?.ToLowerInvariant() == "off") a.ClosingEnabled = false;
+        Apply(a, AutoPilotSet);
+        var plan = AutoPilotPlan.FromPresets(a, BotPresets.CreateDefaults());
+        Apply(plan.Morning, MorningSet);
+        if (plan.Day is not null) Apply(plan.Day, DaySet);
+        return plan;
+    }
+
+    private static void Apply(object target, string? assignments)
+    {
+        if (string.IsNullOrWhiteSpace(assignments)) return;
+        foreach (var kv in assignments.Split(',', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var parts = kv.Split('=', 2);
+            var prop = target.GetType().GetProperty(parts[0].Trim())
+                       ?? throw new ArgumentException($"알 수 없는 설정: {parts[0]}");
+            var t = prop.PropertyType;
+            var v = parts[1].Trim();
+            object value = t == typeof(TimeOnly) ? TimeOnly.Parse(v)
+                : t.IsEnum ? Enum.Parse(t, v, ignoreCase: true)
+                : Convert.ChangeType(v, t, System.Globalization.CultureInfo.InvariantCulture);
+            prop.SetValue(target, value);
+        }
+    }
 }
