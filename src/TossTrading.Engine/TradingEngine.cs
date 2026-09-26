@@ -730,7 +730,7 @@ public sealed class TradingEngine : IBotHost, IAsyncDisposable
             {
                 limits = await _source.GetPriceLimitsAsync(symbol, ct).ConfigureAwait(false);
                 book = await _source.GetOrderBookAsync(symbol, ct).ConfigureAwait(false);
-                daily = await _source.GetDailyBarsAsync(symbol, 1, ct).ConfigureAwait(false);
+                daily = await _source.GetDailyBarsAsync(symbol, 20, ct).ConfigureAwait(false);
                 info = (await _source.GetStocksAsync(new[] { symbol }, ct).ConfigureAwait(false)).FirstOrDefault();
             }
             Post(() =>
@@ -740,6 +740,7 @@ public sealed class TradingEngine : IBotHost, IAsyncDisposable
                 if (limits is not null) ctx.Limits = limits;
                 if (book is not null && ctx.OrderBook is null) ctx.OnOrderBook(book);
                 if (daily.Count > 0) ctx.PreviousClose ??= daily[^1].Close;
+                if (daily.Count >= 20) ctx.DailyMa20 = daily.TakeLast(20).Average(b => b.Close);
                 if (info is not null && ctx.Name == symbol) { ctx.Name = info.Name; _paper?.SetName(symbol, info.Name); }
             });
         }

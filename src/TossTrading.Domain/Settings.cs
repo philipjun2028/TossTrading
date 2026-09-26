@@ -32,6 +32,22 @@ public sealed class BotSettings
     public bool ConvictionSizing { get; set; } = true;
     public decimal ConvictionMultiplier { get; set; } = 1.5m;
 
+    /// <summary>
+    /// ORB 추세·거래량 확신: 돌파 순간 거래량이 직전 평균의 1.5배 이상 + 전일 종가가 20일선 위이면 A등급과 같은 비중 확대.
+    /// (2026-01~09 연구: 해당 거래 +1.84%/건 vs 전체 +1.56%, 상·하반기 모두 우위. A등급과 합쳐 확대 시 총수익 +15%)
+    /// </summary>
+    public bool ConvictionTrendVolume { get; set; } = true;
+
+    /// <summary>VWAP 눌림 추가 조건: 신호 봉 거래량 ≥ 직전 10봉 평균 × 배수 (0 = 끔)</summary>
+    public decimal VwapMinVolumeRatio { get; set; }
+
+    /// <summary>VWAP 눌림 추가 조건: 전일 종가가 20일선 위 (일봉 20개 없으면 진입 안 함)</summary>
+    public bool VwapRequireAboveMa20 { get; set; }
+
+    /// <summary>VWAP 눌림 추가 조건: 등락률 상한 % (0 = 끔)</summary>
+    public decimal VwapMaxChangePct { get; set; }
+    public decimal ConvictionVolumeRatio { get; set; } = 1.5m;
+
     // ---- 자금 ----
     public SizingMode Sizing { get; set; } = SizingMode.RiskBased;
 
@@ -214,6 +230,9 @@ public static class BotPresets
     /// <summary>자동 운용 종가 (오버나잇 바스켓)</summary>
     public const string Overnight = "오버나잇 바스켓";
 
+    /// <summary>자동 운용 장중 단타 (09:30~11:00 VWAP 눌림, 추세·거래량 필터)</summary>
+    public const string VwapTrend = "VWAP 추세 눌림";
+
     public static Dictionary<string, BotSettings> CreateDefaults() => new()
     {
         // ORB: 09:05~09:30 첫 돌파, 등락 3~10%·갭 ≤10%·범위 ≤6% 필터, 손절 3%·목표 10%·15:05 청산.
@@ -247,6 +266,19 @@ public static class BotPresets
             RiskPerTradePct = 0.2m, StopLossPct = 3m, UseStructuralStop = false,
             PartialTakeProfitPct = 2m, TakeProfitPct = 5m, TrailingActivationPct = 2.5m, TrailingDistancePct = 1.5m,
             TimeStopMinutes = 0, MaxEntries = 1, BotTargetProfitPct = 0, BotMaxLossPct = 0,
+        },
+        // 2026-01~09 연구: VWAP 눌림은 짧은 손절·익절이면 손실이지만, 09:30~11:00 · 거래량 2배 · 20일선 위 · 등락 10% 미만으로
+        // 거르고 손절 3% / 익절 10% / 15:05 청산으로 오후까지 들고 가면 거래당 +1.1% (상반기 +1.3%, 하반기 +0.9%)
+        [VwapTrend] = new BotSettings
+        {
+            Mode = BotMode.FullAuto, Strategy = EntryStrategyKind.VwapReclaim,
+            EntryStartTime = new TimeOnly(9, 30), EntryEndTime = new TimeOnly(11, 0),
+            RiskPerTradePct = 0.3m, MaxPositionAmount = 2_000_000m,
+            StopLossPct = 3m, UseStructuralStop = false,
+            PartialTakeProfitPct = 0, TakeProfitPct = 10m, TrailingActivationPct = 0, MoveStopToBreakEven = false,
+            TimeStopMinutes = 0, ForceExitTime = new TimeOnly(15, 5),
+            MaxEntries = 1, BotTargetProfitPct = 0, BotMaxLossPct = 0, ConvictionSizing = false,
+            VwapMinVolumeRatio = 2m, VwapRequireAboveMa20 = true, VwapMaxChangePct = 10m,
         },
         ["VWAP 눌림 표준"] = new BotSettings
         {

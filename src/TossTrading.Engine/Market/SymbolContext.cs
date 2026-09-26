@@ -26,6 +26,9 @@ public sealed class SymbolContext
     public decimal LastPrice => _lastPrice;
     public DateTimeOffset LastTradeTime { get; private set; }
     public decimal? PreviousClose { get; set; }
+
+    /// <summary>전일까지 20일 종가 이동평균 (일봉 20개 이상일 때만)</summary>
+    public decimal? DailyMa20 { get; set; }
     public PriceLimits? Limits { get; set; }
 
     public decimal DayOpen { get; private set; }
@@ -97,6 +100,7 @@ public sealed class SymbolContext
     public void ResetSession()
     {
         if (_lastPrice > 0) PreviousClose = _lastPrice;
+        DailyMa20 = null;                                   // 새 거래일 보강(SeedCoreAsync) 때 다시 계산
         _bars.Clear();
         CurrentBar = null;
         DayOpen = DayHigh = DayLow = 0;
