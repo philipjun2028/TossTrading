@@ -118,6 +118,9 @@ public sealed class SettingsViewModel : ViewModelBase
     public bool EngineRunning { get; }
     public IReadOnlyList<string> PresetNames => Settings.Presets.Keys.ToList();
 
+    /// <summary>장중 프리셋은 "사용 안 함"도 고를 수 있다</summary>
+    public IReadOnlyList<string> DayPresetNames => new[] { AutoPilotSettings.NoPreset }.Concat(PresetNames).ToList();
+
     /// <summary>자동 운용이 쓰는 프리셋 편집 (파라미터: Morning / Day / Closing)</summary>
     public DelegateCommand<string> EditPresetCommand { get; }
 
@@ -129,6 +132,11 @@ public sealed class SettingsViewModel : ViewModelBase
             "Day" => Settings.AutoPilot.DayPreset,
             _ => Settings.AutoPilot.ClosingPreset,
         };
+        if (name == AutoPilotSettings.NoPreset)
+        {
+            DXMessageBox.Show("장중 프리셋이 '사용 안 함'입니다. 쓰려면 먼저 프리셋을 고르세요.", "프리셋 편집");
+            return;
+        }
         if (!Settings.Presets.TryGetValue(name, out var preset))
         {
             DXMessageBox.Show($"프리셋 '{name}' 이 없습니다.", "프리셋 편집");

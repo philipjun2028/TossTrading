@@ -29,6 +29,10 @@
                                ToolTip="그날 고가 기준 등락률·거래대금 조건을 넘은 종목 중 거래대금 상위 N개의 분봉을 받아 재생합니다" />
                     <dxe:SpinEdit Width="70" Margin="3" EditValue="{Binding MaxSymbolsPerDay}" EditValueType="{x:Type sys:Int32}"
                                   Increment="5" MinValue="5" MaxValue="150" IsFloatValue="False" />
+                    <TextBlock Text="봉 내부 순서" VerticalAlignment="Center" Margin="12,0,4,0"
+                               ToolTip="1분봉 안에서 고가·저가 중 무엇을 먼저 지났는지는 알 수 없어 가정합니다. 두 가지로 각각 돌려 차이를 보면 결과가 이 가정에 얼마나 좌우되는지 알 수 있습니다." />
+                    <dxe:ComboBoxEdit Width="190" Margin="3" IsTextEditable="False" ItemsSource="{Binding IntrabarPathOptions}"
+                                      DisplayMember="Label" ValueMember="Value" EditValue="{Binding IntrabarPath}" />
                 </WrapPanel>
                 <DockPanel Margin="0,2,0,0">
                     <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">

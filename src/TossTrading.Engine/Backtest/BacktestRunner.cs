@@ -26,6 +26,9 @@ public sealed class BacktestOptions
     /// </summary>
     public int TicksPerLeg { get; set; } = 6;
 
+    /// <summary>1분봉 내부 가격 순서 가정. 두 가정으로 각각 돌려 차이를 보면 결과가 가정에 얼마나 민감한지 알 수 있다.</summary>
+    public IntrabarPath IntrabarPath { get; set; } = IntrabarPath.Conservative;
+
     /// <summary>스캐너 실행 간격 (가상 시간, 분)</summary>
     public int ScanIntervalMinutes { get; set; } = 1;
 
@@ -65,7 +68,8 @@ public sealed record BacktestResult(
     string? OutputDirectory,
     TimeSpan Elapsed,
     bool Canceled,
-    int TicksPerLeg = 1);
+    int TicksPerLeg = 1,
+    IntrabarPath IntrabarPath = IntrabarPath.Conservative);
 
 /// <summary>
 /// 백테스트 실행기: 과거 데이터를 하루씩 ReplayMarket 으로 재생하면서 실제 TradingEngine(자동 운용·봇·리스크·모의체결)을 돌린다.
@@ -138,7 +142,7 @@ public sealed class BacktestRunner
         if (days.Count == 0) throw new InvalidOperationException("기간 안에 거래일 데이터가 없습니다 (일봉 없음).");
 
         // ---- 2. 엔진 준비 ----
-        var replay = new ReplayMarket(Kst.At(days[0], new TimeOnly(8, 30)));
+        var replay = new ReplayMarket(Kst.At(days[0], new TimeOnly(8, 30))) { Path = _o.IntrabarPath };
         var options = new EngineOptions
         {
             Execution = ExecutionMode.Paper,
@@ -297,7 +301,7 @@ public sealed class BacktestRunner
         return new BacktestResult(_o.From, _o.To, _history.Name, _o.StartingCash, Math.Round(endEquity, 0), Math.Round(net, 0),
             _o.StartingCash > 0 ? Math.Round(net / _o.StartingCash * 100m, 3) : 0,
             Math.Round(trades.Sum(t => t.NetPnl), 0), Math.Round(maxDd, 3),
-            results, trades, open, _warnings.ToList(), _o.OutputDirectory, DateTime.UtcNow - started, canceled, _o.TicksPerLeg);
+            results, trades, open, _warnings.ToList(), _o.OutputDirectory, DateTime.UtcNow - started, canceled, _o.TicksPerLeg, _o.IntrabarPath);
     }
 
     /// <summary>

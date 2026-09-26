@@ -182,13 +182,19 @@ public sealed class AutoPilot
             if (s.MinDayScore > 0 && c.Score < s.MinDayScore) continue;
             if (_usedDay.Contains(c.Symbol) || HasBot(c.Symbol)) continue;
 
-            var bs = (t < s.MorningUntil ? Plan.Morning : Plan.Day).Clone();
+            var preset = t < s.MorningUntil ? Plan.Morning : Plan.Day;
+            if (preset is null) return;                       // 장중 프리셋 "사용 안 함" → 오전 이후 새 단타 없음
+            var bs = preset.Clone();
             bs.Mode = BotMode.FullAuto;
-            if (bs.Strategy is EntryStrategyKind.Manual or EntryStrategyKind.ClosingBet) bs.Strategy = EntryStrategyKind.VwapReclaim;
+            if (bs.Strategy is EntryStrategyKind.Manual or EntryStrategyKind.ClosingBet) bs.Strategy = EntryStrategyKind.OpeningRangeBreakout;
             bs.HoldOvernight = false;
             if (bs.EntryStartTime < s.DayStartTime) bs.EntryStartTime = s.DayStartTime;
-            bs.EntryEndTime = s.DayEntryEndTime;
-            bs.ForceExitTime = s.DayExitTime;
+            // 프리셋의 진입 시간대를 넓히지 않는다 (ORB 는 오전 전략 — 오후에 아침 범위 "돌파"는 의미 없음)
+            if (bs.EntryEndTime > s.DayEntryEndTime) bs.EntryEndTime = s.DayEntryEndTime;
+            if (bs.ForceExitTime > s.DayExitTime) bs.ForceExitTime = s.DayExitTime;
+            if (bs.EntryEndTime <= Kst.TimeOf(_host.Now)) continue; // 진입 시간이 이미 지난 프리셋으로는 만들지 않음
+            // ORB 는 하루 첫 돌파만 → 한 번 거래하면 봇을 끝내 다른 종목에 자리를 넘긴다
+            if (bs.Strategy == EntryStrategyKind.OpeningRangeBreakout) bs.MaxEntries = 1;
 
             _usedDay.Add(c.Symbol);
             if (Add(c, bs, DayRole, $"단타 선정 (점수 {c.Score:0}, {c.ChangePct:+0.0;-0.0}%)")) free--;

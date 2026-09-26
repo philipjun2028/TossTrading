@@ -37,6 +37,7 @@ public sealed class BacktestViewModel : ViewModelBase
         DayTradingEnabled = settings.AutoPilot.DayTradingEnabled;
         ClosingEnabled = settings.AutoPilot.ClosingEnabled;
         MaxSymbolsPerDay = 40;
+        IntrabarPath = "conservative";
         ExtraSymbols = "";
         Progress = 0;
         ProgressText = "기간과 데이터를 고르고 [▶ 실행]을 누르세요.";
@@ -59,6 +60,15 @@ public sealed class BacktestViewModel : ViewModelBase
     public bool DayTradingEnabled { get => GetValue<bool>(); set => SetValue(value); }
     public bool ClosingEnabled { get => GetValue<bool>(); set => SetValue(value); }
     public int MaxSymbolsPerDay { get => GetValue<int>(); set => SetValue(value); }
+
+    /// <summary>1분봉 내부 가격 순서 가정 (conservative / nearest)</summary>
+    public string IntrabarPath { get => GetValue<string>(); set => SetValue(value); }
+
+    public IReadOnlyList<ChoiceOption<string>> IntrabarPathOptions { get; } = new[]
+    {
+        new ChoiceOption<string>("conservative", "보수적 (양봉은 저가 먼저)"),
+        new ChoiceOption<string>("nearest", "시가에서 가까운 쪽 먼저"),
+    };
     public string ExtraSymbols { get => GetValue<string>(); set => SetValue(value); }
 
     // ---------------------------------------------------------------- 진행
@@ -136,6 +146,7 @@ public sealed class BacktestViewModel : ViewModelBase
             Plan = AutoPilotPlan.FromPresets(auto, _settings.Presets),
             Risk = _settings.Risk.Clone(), Scanner = _settings.Scanner.Clone(), Cost = _settings.Cost.Clone(),
             MaxSymbolsPerDay = Math.Max(5, MaxSymbolsPerDay),
+            IntrabarPath = IntrabarPath == "nearest" ? Engine.Backtest.IntrabarPath.NearestFirst : Engine.Backtest.IntrabarPath.Conservative,
             ExtraSymbols = ExtraSymbols.Split(new[] { ',', ' ', '\n', '\r', ';' }, StringSplitOptions.RemoveEmptyEntries).ToList(),
             OutputDirectory = Path.Combine(BacktestDirectory, $"{DateTime.Now:yyyyMMdd_HHmmss}"),
         };

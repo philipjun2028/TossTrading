@@ -40,11 +40,15 @@ public static class EntrySignalFactory
 /// <summary>
 /// 시가범위 돌파 (ORB). 09:00~N분 고가를 "아래에서 위로" 돌파하는 순간만 신호 (추격 방지).
 /// 조건: VWAP 위, 돌파 봉 거래량이 최근 평균 이상. 손절 = 범위 저가 − 1틱.
+/// **하루 첫 돌파만** 신호: 한 번 돌파한 뒤 되밀렸다가 같은 가격을 다시 넘는 것은 돌파가 아니라 눌림 재돌파라
+/// 백테스트에서 성과가 나빴다 (2026-01~09 토스 데이터).
 /// </summary>
 public sealed class OpeningRangeBreakoutSignal : IEntrySignal
 {
     private decimal _prevPrice;
-    private bool _armed = true;
+    private DateOnly _brokenOn;
+    private decimal _maxInBar;
+    private DateTimeOffset _maxInBarStart;
 
     public string Name => "ORB";
 
@@ -54,15 +58,23 @@ public sealed class OpeningRangeBreakoutSignal : IEntrySignal
         var price = ctx.LastPrice;
         var prev = _prevPrice;
         _prevPrice = price;
+        // 현재 분봉에서 이번 체결 전까지의 최고가 (같은 분 안에서 넘었다 내려온 경우 감지)
+        var curStart = ctx.CurrentBar?.Start ?? default;
+        if (curStart != _maxInBarStart) { _maxInBarStart = curStart; _maxInBar = 0; }
+        var maxBeforeInBar = _maxInBar;
+        _maxInBar = Math.Max(_maxInBar, price);
 
         var (hi, lo, complete) = ctx.OpeningRange(s.OrbMinutes, now);
         if (!complete || prev == 0) return null;
 
-        // 범위 아래로 충분히 내려오면 다시 무장
-        if (!_armed && price < hi * 0.997m) _armed = true;
-        if (!_armed) return null;
-
+        var today = Kst.DateOf(now);
+        if (_brokenOn == today) return null;                 // 오늘 이미 돌파함
         if (prev > hi || price <= hi) return null;          // 교차 순간만
+
+        // 봇이 생기기 전에 이미 범위 위로 올라갔다 내려온 종목은 첫 돌파가 아님 (마감된 1분봉으로 확인)
+        var rangeEnd = Kst.At(today, Kst.MarketOpen).AddMinutes(s.OrbMinutes);
+        if (ctx.Bars.Any(b => b.Start >= rangeEnd && b.High > hi)) { _brokenOn = today; return null; }
+        if (curStart >= rangeEnd && maxBeforeInBar > hi) { _brokenOn = today; return null; }
         if (price < ctx.Vwap) return null;
         var rangePct = lo > 0 ? (hi - lo) / lo * 100m : 0;
         if (rangePct > 10m) return null;                    // 범위가 너무 넓으면 손익비 불리
@@ -72,7 +84,7 @@ public sealed class OpeningRangeBreakoutSignal : IEntrySignal
         var elapsed = Math.Max(0.1m, (decimal)(now - (ctx.CurrentBar?.Start ?? now)).TotalSeconds / 60m);
         if (avgVol > 0 && curVol / Math.Min(elapsed, 1m) < avgVol * 1.2m) return null; // 거래량 동반
 
-        _armed = false;
+        _brokenOn = today;
         return new EntrySignal(price, TickRules.AddTicks(lo, -1, ctx.Market),
             $"ORB{s.OrbMinutes} 고가 {hi:N0} 돌파 (범위 {rangePct:F1}%)", now);
     }

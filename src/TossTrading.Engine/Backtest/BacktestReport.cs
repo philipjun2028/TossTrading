@@ -23,7 +23,8 @@ public static class BacktestReport
 
         sb.AppendLine($"# 백테스트 결과 ({r.From:yyyy-MM-dd} ~ {r.To:yyyy-MM-dd})");
         sb.AppendLine($"데이터: {r.DataName} · 거래일 {r.Days.Count}일 (재생 {tradingDays}일) · 소요 {r.Elapsed.TotalSeconds:F0}초{(r.Canceled ? " · **중간 취소됨**" : "")}");
-        sb.AppendLine("수익은 모두 수수료·세금 차감 후(순). 체결은 1분봉을 4개 체결(시가→저/고→고/저→종가)로 쪼갠 모의 체결입니다.");
+        sb.AppendLine($"수익은 모두 수수료·세금 차감 후(순). 체결은 1분봉을 시가→고/저→저/고→종가 경로(구간당 {r.TicksPerLeg}체결, " +
+                      $"{(r.IntrabarPath == IntrabarPath.NearestFirst ? "시가에서 가까운 극값 먼저" : "보수적: 양봉은 저가 먼저")})로 재생한 모의 체결입니다.");
         sb.AppendLine();
         sb.AppendLine("## 요약");
         sb.AppendLine("| 항목 | 값 |");
@@ -161,6 +162,7 @@ public static class BacktestReport
         var sb = new StringBuilder();
         sb.AppendLine("# 체결 품질 진단");
         sb.AppendLine($"재생 정밀도: 1분봉 구간당 {r.TicksPerLeg}개 체결 (1이면 봉 꼭짓점만 → 돌파는 봉 고가, 손절은 봉 저가에 체결되어 결과가 나빠짐)");
+        sb.AppendLine($"봉 내부 순서: {(r.IntrabarPath == IntrabarPath.NearestFirst ? "시가에서 가까운 극값 먼저" : "보수적 (양봉은 저가 먼저, 음봉은 고가 먼저)")}");
         sb.AppendLine();
         sb.AppendLine("## 청산 유형별 체결가 (청산 기준가 대비 %)");
         sb.AppendLine("| 유형 | 건수 | 평균 | 중앙값 | 하위 10% | 최악 |");

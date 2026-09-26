@@ -12,6 +12,7 @@ var dataDir = OptionValue(ref args, "--data");
 var sourceOpt = OptionValue(ref args, "--source");
 var symbolsOpt = OptionValue(ref args, "--symbols");
 var cashOpt = OptionValue(ref args, "--cash");
+var pathOpt = OptionValue(ref args, "--path");
 var cmd = args.FirstOrDefault()?.ToLowerInvariant();
 
 return cmd switch
@@ -20,7 +21,7 @@ return cmd switch
     "sim" => await SimAsync(args.Length > 1 ? int.Parse(args[1]) : 60, args.Length > 2 ? double.Parse(args[2]) : 60,
                             closing: args.Length > 3 && args[3].Equals("closing", StringComparison.OrdinalIgnoreCase), dataDir,
                             auto: args.Length > 3 && args[3].Equals("auto", StringComparison.OrdinalIgnoreCase)),
-    "backtest" => await BacktestAsync(args, dataDir, sourceOpt, symbolsOpt, cashOpt),
+    "backtest" => await BacktestAsync(args, dataDir, sourceOpt, symbolsOpt, cashOpt, pathOpt),
     "report" => Report(args.Length > 1 ? int.Parse(args[1]) : 30, dataDir, sourceOpt),
     _ => Usage(),
 };
@@ -50,7 +51,7 @@ static int Usage()
                              과거 데이터로 자동 운용(단타→종가매매)을 재생해 거래내역·수익률·수익금 리포트
                              예) backtest 2026-08-01 2026-08-31 --source toss --cash 10000000
                              --source toss (TOSS_CLIENT_ID/SECRET 필요) | synthetic (가상 데이터, 기본)
-                             --symbols 005930,000660 (순위 종목 외 추가), 결과: <데이터폴더>\backtests\<실행시각>\
+                             --symbols 005930,000660 (추가 종목), --path nearest (봉 내부: 시가에서 가까운 극값 먼저), 결과: <데이터폴더>\backtests\<실행시각>\
           report [일수]      최근 N일(기본 30) 분석 기록으로 성과 리포트 + 개선 제안 생성
                              --data <폴더> (기본: %LocalAppData%\TossTrading), --source sim|toss
                              결과: <폴더>\reports\report_*.md, trades_*.csv, signals_*.csv
@@ -152,7 +153,7 @@ static int Report(int days, string? dataDir, string? source)
     return 0;
 }
 
-static async Task<int> BacktestAsync(string[] args, string? dataDir, string? source, string? symbols, string? cash)
+static async Task<int> BacktestAsync(string[] args, string? dataDir, string? source, string? symbols, string? cash, string? path)
 {
     if (args.Length < 3 || !DateOnly.TryParse(args[1], out var from) || !DateOnly.TryParse(args[2], out var to))
     {
@@ -165,6 +166,7 @@ static async Task<int> BacktestAsync(string[] args, string? dataDir, string? sou
         From = from, To = to,
         StartingCash = cash is null ? 10_000_000m : decimal.Parse(cash),
         ExtraSymbols = symbols?.Split(',', StringSplitOptions.RemoveEmptyEntries).ToList() ?? new(),
+        IntrabarPath = path?.ToLowerInvariant() == "nearest" ? TossTrading.Engine.Backtest.IntrabarPath.NearestFirst : TossTrading.Engine.Backtest.IntrabarPath.Conservative,
         OutputDirectory = Path.Combine(dataDir, "backtests", $"{Kst.Now:yyyyMMdd_HHmmss}"),
     };
 

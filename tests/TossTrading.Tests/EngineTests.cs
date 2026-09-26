@@ -340,6 +340,33 @@ public class EntrySignalTests
         Assert.Equal(9_990m, fired!.StructuralStop);        // 범위 저가 10,000 − 1틱
         ctx.OnTrade(new TradeTick("000001", 10_160m, 500, t.AddSeconds(2)));
         Assert.Null(sig.Evaluate(ctx, t.AddSeconds(2), s, SignalTrigger.Trade)); // 재무장 전 재발사 금지
+
+        // 되밀렸다가 같은 가격을 다시 넘어도 하루 첫 돌파가 아니므로 신호 없음
+        var t2 = t.AddMinutes(3);
+        ctx.OnTrade(new TradeTick("000001", 10_050m, 500, t2));
+        sig.Evaluate(ctx, t2, s, SignalTrigger.Trade);
+        ctx.OnTrade(new TradeTick("000001", 10_150m, 900, t2.AddSeconds(5)));
+        Assert.Null(sig.Evaluate(ctx, t2.AddSeconds(5), s, SignalTrigger.Trade));
+    }
+
+    [Fact]
+    public void OrbIgnoresReCrossWhenBreakoutHappenedBeforeBotStarted()
+    {
+        var ctx = new SymbolContext("000001", "테스트") { PreviousClose = 9_500m };
+        var s = new BotSettings { OrbMinutes = 5 };
+        for (var m = 0; m < 5; m++)
+        {
+            ctx.OnTrade(new TradeTick("000001", 10_000m, 100, Open.AddMinutes(m)));
+            ctx.OnTrade(new TradeTick("000001", 10_100m, 100, Open.AddMinutes(m).AddSeconds(30)));
+        }
+        ctx.OnTrade(new TradeTick("000001", 10_400m, 900, Open.AddMinutes(6)));   // 봇이 없을 때 이미 돌파
+        ctx.OnTrade(new TradeTick("000001", 10_050m, 300, Open.AddMinutes(8)));   // 되밀림
+        var sig = new OpeningRangeBreakoutSignal();                                // 이제 봇 생성
+        var t = Open.AddMinutes(9);
+        ctx.OnTrade(new TradeTick("000001", 10_060m, 300, t));
+        Assert.Null(sig.Evaluate(ctx, t, s, SignalTrigger.Trade));
+        ctx.OnTrade(new TradeTick("000001", 10_150m, 2_000, t.AddSeconds(5)));   // 재돌파
+        Assert.Null(sig.Evaluate(ctx, t.AddSeconds(5), s, SignalTrigger.Trade));
     }
 }
 

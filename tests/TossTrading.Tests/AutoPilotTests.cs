@@ -72,14 +72,25 @@ public class AutoPilotTests
         Assert.Equal(AutoPilot.DayRole, bot.AutoRole);
         Assert.Equal(BotMode.FullAuto, bot.Settings.Mode);
         Assert.Equal(EntryStrategyKind.OpeningRangeBreakout, bot.Settings.Strategy);   // 10시 전 → 오전 프리셋
-        Assert.Equal(new TimeOnly(14, 30), bot.Settings.EntryEndTime);
+        Assert.Equal(new TimeOnly(11, 0), bot.Settings.EntryEndTime);             // 프리셋의 진입 시간대를 넓히지 않음
         Assert.Equal(new TimeOnly(14, 50), bot.Settings.ForceExitTime);
+        Assert.Equal(1, bot.Settings.MaxEntries);                                   // ORB 는 하루 첫 돌파 1회
         Assert.Equal(BotState.Watching, bot.State);
+    }
+
+    [Fact]
+    public void NoDayPresetMeansNoNewBotsAfterMorning()
+    {
+        At(10, 30);
+        _host.CandidateList = new() { Day("A", 80) };
+        _ap.OnTimer();                                                              // 기본: 장중 프리셋 "사용 안 함"
+        Assert.Empty(_host.BotList);
     }
 
     [Fact]
     public void AfternoonUsesDayPresetAndDoesNotReuseSymbols()
     {
+        _ap.UpdatePlan(AutoPilotPlan.FromPresets(new AutoPilotSettings { Enabled = true, DayPreset = "VWAP 눌림 표준" }, BotPresets.CreateDefaults()));
         At(11, 0);
         _host.CandidateList = new() { Day("A", 80) };
         _ap.OnTimer();

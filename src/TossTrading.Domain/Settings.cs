@@ -257,7 +257,15 @@ public sealed class AutoPilotSettings
     public int IdleReplaceMinutes { get; set; } = 30;
 
     public string MorningPreset { get; set; } = "ORB 표준";
-    public string DayPreset { get; set; } = "VWAP 눌림 표준";
+
+    /// <summary>
+    /// 오전 이후 단타 프리셋. 기본 "사용 안 함": VWAP 눌림은 2026-01~09 토스 백테스트에서
+    /// 상·하반기 모두 Profit Factor 0.3 대로 손실이 커서 기본으로 끔.
+    /// </summary>
+    public string DayPreset { get; set; } = NoPreset;
+
+    /// <summary>프리셋 "사용 안 함" 표시값</summary>
+    public const string NoPreset = "(사용 안 함)";
 
     // ---- 종가매매 ----
     public bool ClosingEnabled { get; set; } = true;
@@ -293,7 +301,7 @@ public sealed class AutoPilotSettings
 }
 
 /// <summary>자동 운용 설정 + 실제로 사용할 봇 설정 (프리셋 이름을 풀어 둔 것)</summary>
-public sealed record AutoPilotPlan(AutoPilotSettings Settings, BotSettings Morning, BotSettings Day, BotSettings Closing)
+public sealed record AutoPilotPlan(AutoPilotSettings Settings, BotSettings Morning, BotSettings? Day, BotSettings Closing)
 {
     public static AutoPilotPlan Default(bool enabled = false) =>
         FromPresets(new AutoPilotSettings { Enabled = enabled }, BotPresets.CreateDefaults());
@@ -306,7 +314,9 @@ public sealed record AutoPilotPlan(AutoPilotSettings Settings, BotSettings Morni
             (presets.TryGetValue(name, out var p) && ok(p) ? p : defaults[fallback]).Clone();
 
         var day = Pick(s.MorningPreset, "ORB 표준", p => p.Strategy is not (EntryStrategyKind.Manual or EntryStrategyKind.ClosingBet));
-        var day2 = Pick(s.DayPreset, "VWAP 눌림 표준", p => p.Strategy is not (EntryStrategyKind.Manual or EntryStrategyKind.ClosingBet));
+        BotSettings? day2 = string.IsNullOrEmpty(s.DayPreset) || s.DayPreset == AutoPilotSettings.NoPreset
+            ? null
+            : Pick(s.DayPreset, "VWAP 눌림 표준", p => p.Strategy is not (EntryStrategyKind.Manual or EntryStrategyKind.ClosingBet));
         var closing = Pick(s.ClosingPreset, "종가베팅 (익일 매도)", p => p.Strategy == EntryStrategyKind.ClosingBet);
         return new AutoPilotPlan(s.Clone(), day, day2, closing);
     }

@@ -9,6 +9,16 @@ namespace TossTrading.Engine.Backtest;
 ///  - 조회 결과는 모두 "지금 시각까지" 데이터만 돌려준다 (미래 데이터 사용 금지)
 /// 백테스트 실행기(BacktestRunner)만 시계를 움직인다.
 /// </summary>
+/// <summary>1분봉 내부 가격 순서 가정</summary>
+public enum IntrabarPath
+{
+    /// <summary>양봉은 저가 먼저, 음봉은 고가 먼저 (매수 포지션에 불리한 쪽 — 기본)</summary>
+    Conservative,
+
+    /// <summary>시가에서 가까운 극값 먼저 (흔히 쓰는 중립적 가정)</summary>
+    NearestFirst,
+}
+
 public sealed class ReplayMarket : IMarketDataFeed, IMarketDataSource, IClock
 {
     /// <summary>한 분봉을 나누는 체결 수와 간격(초)</summary>
@@ -93,8 +103,8 @@ public sealed class ReplayMarket : IMarketDataFeed, IMarketDataSource, IClock
         foreach (var (sym, st) in _day)
         {
             if (!st.Bars.TryGetValue(minute, out var bar)) continue;
-            var target = PathPrice(bar, phase);
-            var from = phase == 0 ? target : PathPrice(bar, phase - 1);
+            var target = PathPriceOf(bar, phase);
+            var from = phase == 0 ? target : PathPriceOf(bar, phase - 1);
             var price = sub == subCount ? target : InterpolateToTick(from, target, (decimal)sub / subCount);
 
             // 구간 거래량을 누적 비율로 나눠 합계가 정확히 맞게
@@ -130,6 +140,24 @@ public sealed class ReplayMarket : IMarketDataFeed, IMarketDataSource, IClock
     {
         var raw = from + (to - from) * fraction;
         return to >= from ? TickRules.RoundDown(raw) : TickRules.RoundUp(raw);
+    }
+
+    /// <summary>봉 안에서 고가·저가 중 어느 쪽을 먼저 지나는지 (1분봉만으로는 알 수 없어 가정)</summary>
+    public IntrabarPath Path { get; set; } = IntrabarPath.Conservative;
+
+    private decimal PathPriceOf(Bar b, int phase) => Path == IntrabarPath.NearestFirst ? NearestFirstPrice(b, phase) : PathPrice(b, phase);
+
+    /// <summary>시가에서 가까운 극값을 먼저 지난다고 가정</summary>
+    public static decimal NearestFirstPrice(Bar b, int phase)
+    {
+        var highFirst = b.High - b.Open < b.Open - b.Low;
+        return phase switch
+        {
+            0 => b.Open,
+            1 => highFirst ? b.High : b.Low,
+            2 => highFirst ? b.Low : b.High,
+            _ => b.Close,
+        };
     }
 
     public static decimal PathPrice(Bar b, int phase)

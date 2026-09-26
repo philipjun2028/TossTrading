@@ -28,6 +28,9 @@ public sealed class AppSettings
     /// <summary>자동 운용 (종목 자동 선정 + 단타 → 종가매매 자동 전환)</summary>
     public AutoPilotSettings AutoPilot { get; set; } = new() { Enabled = true };
 
+    /// <summary>설정 파일 형식 버전 (기본값이 바뀐 항목을 한 번만 옮기기 위해)</summary>
+    public int SettingsVersion { get; set; } // 없으면 0 → 불러올 때 이전 기본값을 옮긴다
+
     public AutoPilotPlan AutoPilotPlan() => Domain.AutoPilotPlan.FromPresets(AutoPilot, Presets);
 
     public decimal PaperStartingCash { get; set; } = 10_000_000m;
@@ -116,8 +119,16 @@ public static class SettingsStore
     /// <summary>
     /// 종목 자동 선정으로 바뀐 뒤: 수동 진입 전용 프리셋은 쓸 곳이 없어 지우고, 나머지는 완전자동으로 맞춘다.
     /// </summary>
+    public const int CurrentVersion = 2;
+
     public static void MigratePresets(AppSettings s)
     {
+        if (s.SettingsVersion < 2)
+        {
+            // v2: 장중 VWAP 눌림은 백테스트(2026-01~09) PF 0.3 대 → 기본값이던 경우 "사용 안 함"으로
+            if (s.AutoPilot.DayPreset == "VWAP 눌림 표준") s.AutoPilot.DayPreset = AutoPilotSettings.NoPreset;
+            s.SettingsVersion = 2;
+        }
         foreach (var name in s.Presets.Where(kv => kv.Value.Strategy == EntryStrategyKind.Manual).Select(kv => kv.Key).ToList())
             s.Presets.Remove(name);
         foreach (var p in s.Presets.Values) p.Mode = BotMode.FullAuto;

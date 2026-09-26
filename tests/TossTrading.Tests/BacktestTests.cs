@@ -66,6 +66,14 @@ public class ReplayMarketTests
     }
 
     [Fact]
+    public void NearestFirstPathVisitsCloserExtremeFirst()
+    {
+        var up = B(0, 10_000, 10_050, 9_700, 10_020);   // 고가가 더 가까움 → 고가 먼저
+        Assert.Equal(new[] { 10_000m, 10_050m, 9_700m, 10_020m }, Enumerable.Range(0, 4).Select(p => ReplayMarket.NearestFirstPrice(up, p)));
+        Assert.Equal(new[] { 10_000m, 9_700m, 10_050m, 10_020m }, Enumerable.Range(0, 4).Select(p => ReplayMarket.PathPrice(up, p))); // 보수적: 양봉 저가 먼저
+    }
+
+    [Fact]
     public void QueriesNeverSeeTheFuture()
     {
         var m = Market(B(0, 10_000, 10_300, 9_900, 10_200), B(1, 10_200, 10_250, 10_000, 10_050), B(2, 10_050, 10_060, 9_990, 10_000));
