@@ -16,7 +16,8 @@ return cmd switch
 {
     "check" => await CheckAsync(),
     "sim" => await SimAsync(args.Length > 1 ? int.Parse(args[1]) : 60, args.Length > 2 ? double.Parse(args[2]) : 60,
-                            closing: args.Length > 3 && args[3].Equals("closing", StringComparison.OrdinalIgnoreCase), dataDir),
+                            closing: args.Length > 3 && args[3].Equals("closing", StringComparison.OrdinalIgnoreCase), dataDir,
+                            auto: args.Length > 3 && args[3].Equals("auto", StringComparison.OrdinalIgnoreCase)),
     "report" => Report(args.Length > 1 ? int.Parse(args[1]) : 30, dataDir, sourceOpt),
     _ => Usage(),
 };
@@ -40,6 +41,7 @@ static int Usage()
           sim [초] [배속] [closing]
                              시뮬레이션 시장 + 모의 체결로 엔진을 헤드리스 실행 (기본 60초, 60배속)
                              closing: 14:40 부터 시작해 종가베팅 봇으로 실행
+                             auto: 자동 운용 (단타 자동 선정 → 14:50 정리 → 종가베팅 자동 선정)
                              --data <폴더> 를 주면 로그·분석 기록(journal)을 그 폴더에 저장
           report [일수]      최근 N일(기본 30) 분석 기록으로 성과 리포트 + 개선 제안 생성
                              --data <폴더> (기본: %LocalAppData%\TossTrading), --source sim|toss
@@ -142,10 +144,14 @@ static int Report(int days, string? dataDir, string? source)
     return 0;
 }
 
-static async Task<int> SimAsync(int seconds, double speed, bool closing, string? dataDir)
+static async Task<int> SimAsync(int seconds, double speed, bool closing, string? dataDir, bool auto = false)
 {
     var sim = new SimulatedMarket(new SimulationOptions { Speed = speed, Seed = 42, StartTime = closing ? new TimeOnly(14, 40) : new TimeOnly(9, 0) });
-    var options = new EngineOptions { Execution = ExecutionMode.Paper, DataSource = DataSourceKind.Simulation, DataDirectory = dataDir };
+    var options = new EngineOptions
+    {
+        Execution = ExecutionMode.Paper, DataSource = DataSourceKind.Simulation, DataDirectory = dataDir,
+        AutoPilot = AutoPilotPlan.Default(enabled: auto),
+    };
     options.Scanner.PollSeconds = 2;
     var paper = new PaperBroker(10_000_000m, new CostModel(options.Cost), sim);
     await using var engine = new TradingEngine(options, sim, sim, paper, sim);
@@ -155,11 +161,12 @@ static async Task<int> SimAsync(int seconds, double speed, bool closing, string?
     var added = new HashSet<string>();
     var end = DateTime.UtcNow.AddSeconds(seconds);
     var lastLog = 0L;
+    var tick = 0;
     while (DateTime.UtcNow < end)
     {
         await Task.Delay(1000);
         var s = engine.Snapshot;
-        foreach (var c in s.Candidates.Take(4))
+        foreach (var c in s.Candidates.Take(auto ? 0 : 4))
         {
             if (added.Count >= 4 || !added.Add(c.Symbol)) continue;
             var preset = (closing ? presets["종가베팅 (익일 매도)"]
@@ -172,11 +179,15 @@ static async Task<int> SimAsync(int seconds, double speed, bool closing, string?
             }
             catch (Exception ex) { Console.WriteLine($"봇 추가 실패: {ex.Message}"); }
         }
+        if (auto && ++tick % 15 == 0)
+            Console.WriteLine($"   [후보 {s.Time:HH:mm}] " + string.Join(", ", s.Candidates.Take(5).Select(c =>
+                c.ClosingTotal > 0 ? $"{c.Name} {c.ClosingPassed}/{c.ClosingTotal}" : $"{c.Name} {c.Score:0}")) + $" | {s.AutoPilot?.Status}");
         foreach (var l in s.Logs.Where(l => l.Seq > lastLog)) Console.WriteLine($"{l.Time:HH:mm:ss} [{l.Level}] {l.Source}: {l.Message}");
         lastLog = s.Logs.Count > 0 ? s.Logs[^1].Seq : lastLog;
     }
 
     var final = engine.Snapshot;
+    if (final.AutoPilot is { } ap) Console.WriteLine($"자동 운용: {ap.Phase} · {ap.Status}");
     Console.WriteLine();
     Console.WriteLine($"== 가상 시각 {final.Time:HH:mm}, 후보 {final.Candidates.Count}개, 봇 {final.Bots.Count}개 ==");
     foreach (var b in final.Bots)

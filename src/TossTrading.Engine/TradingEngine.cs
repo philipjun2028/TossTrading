@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Threading.Channels;
 using TossTrading.Domain;
 using TossTrading.Engine.Analytics;
+using TossTrading.Engine.Automation;
 using TossTrading.Engine.Infrastructure;
 using TossTrading.Engine.Market;
 using TossTrading.Engine.Paper;
@@ -16,6 +17,9 @@ public sealed class EngineOptions
 {
     public ExecutionMode Execution { get; set; } = ExecutionMode.Paper;
     public DataSourceKind DataSource { get; set; } = DataSourceKind.Simulation;
+
+    /// <summary>자동 운용 (종목 자동 선정·매매). 기본 꺼짐.</summary>
+    public AutoPilotPlan AutoPilot { get; set; } = AutoPilotPlan.Default();
     public RiskSettings Risk { get; set; } = new();
     public ScannerSettings Scanner { get; set; } = new();
     public CostSettings Cost { get; set; } = new();
@@ -72,6 +76,9 @@ public sealed class TradingEngine : IBotHost, IAsyncDisposable
     private readonly EngineLog _log;
     private readonly TradeJournal _journal;
     private readonly AnalyticsRecorder _analytics;
+    private readonly AutoPilot _autoPilot;
+    private ScannerSettings _scannerBase;
+    private ScanMode? _scanOverride;
     private readonly TickRecorder? _recorder;
     private readonly OrderManager _orders;
     private readonly ScannerService _scanner;
@@ -129,6 +136,9 @@ public sealed class TradingEngine : IBotHost, IAsyncDisposable
             sym => _liveMetrics.TryGetValue(sym, out var m) ? m : null,
             list => Post(() => HandleCandidates(list)),
             (l, m) => _log.Write(l, "스캐너", m));
+
+        _scannerBase = options.Scanner.Clone();
+        _autoPilot = new AutoPilot(new AutoPilotHost(this), options.AutoPilot);
 
         _feed.Trade += t => Post(() => HandleTrade(t));
         _feed.OrderBook += b => Post(() => HandleBook(b));
@@ -246,7 +256,9 @@ public sealed class TradingEngine : IBotHost, IAsyncDisposable
 
     // ================================================================ 명령 (스레드 안전)
 
-    public Task<string> AddBotAsync(string symbol, string? name, BotSettings settings) => Invoke(() =>
+    public Task<string> AddBotAsync(string symbol, string? name, BotSettings settings) => Invoke(() => AddBotCore(symbol, name, settings).Id);
+
+    private TradingBot AddBotCore(string symbol, string? name, BotSettings settings, string? autoRole = null)
     {
         var errors = settings.Validate();
         if (errors.Count > 0) throw new InvalidOperationException(string.Join("\n", errors));
@@ -254,13 +266,13 @@ public sealed class TradingEngine : IBotHost, IAsyncDisposable
             throw new InvalidOperationException($"{symbol} 에 이미 실행 중인 봇이 있습니다.");
 
         var ctx = EnsureContext(symbol, name, full: true);
-        var bot = new TradingBot($"{symbol}#{++_botSeq}", ctx, settings, this);
+        var bot = new TradingBot($"{symbol}#{++_botSeq}", ctx, settings, this) { AutoRole = autoRole };
         _bots.Add(bot);
         _focus ??= symbol;
         RecomputeSubscriptions();
-        _log.Write(LogLevel.Info, bot.Id, $"봇 추가: {ctx.Name} [{EntrySignalFactory.DisplayName(settings.Strategy)} / {settings.Mode}]");
-        return bot.Id;
-    });
+        _log.Write(LogLevel.Info, bot.Id, $"봇 추가: {ctx.Name} [{EntrySignalFactory.DisplayName(settings.Strategy)} / {settings.Mode}]{(autoRole is null ? "" : " (자동 운용)")}");
+        return bot;
+    }
 
     public Task StartBotAsync(string id) => WithBot(id, b => b.Start());
     public Task StopBotAsync(string id, bool flatten) => WithBot(id, b => b.Stop(flatten));
@@ -300,7 +312,64 @@ public sealed class TradingEngine : IBotHost, IAsyncDisposable
 
     public Task UpdateRiskAsync(RiskSettings s) => Invoke(() => { _risk.UpdateSettings(s); return true; });
 
-    public void UpdateScanner(ScannerSettings s) => _scanner.UpdateSettings(s);
+    public void UpdateScanner(ScannerSettings s) => Post(() => { _scannerBase = s.Clone(); ApplyScanner(); });
+
+    /// <summary>자동 운용 켜기/끄기·설정 변경</summary>
+    public Task SetAutoPilotAsync(AutoPilotPlan plan) => Invoke(() =>
+    {
+        var errors = plan.Settings.Validate();
+        if (errors.Count > 0) throw new InvalidOperationException(string.Join("\n", errors));
+        _autoPilot.UpdatePlan(plan);
+        if (plan.Settings.Enabled) _autoPilot.OnTimer();
+        return true;
+    });
+
+    private void ApplyScanner()
+    {
+        var s = _scannerBase.Clone();
+        if (_scanOverride is { } m) s.Mode = m;
+        _scanner.UpdateSettings(s);
+    }
+
+    /// <summary>자동 운용 → 엔진 연결 (루프 스레드에서만 호출)</summary>
+    private sealed class AutoPilotHost(TradingEngine e) : IAutoPilotHost
+    {
+        public DateTimeOffset Now => e._clock.Now;
+        public IReadOnlyList<ScanCandidate> Candidates => e._candidates;
+        public IReadOnlyList<TradingBot> Bots => e._bots;
+        public string? EntryBlockReason => e._risk.BlockReason(e._clock.Now, e._bots.Sum(b => b.UnrealizedNet));
+
+        public void SetScanMode(ScanMode? mode)
+        {
+            e._scanOverride = mode;
+            e.ApplyScanner();
+        }
+
+        public TradingBot? AddAutoBot(string symbol, string name, BotSettings settings, string role)
+        {
+            try
+            {
+                var bot = e.AddBotCore(symbol, name, settings, role);
+                bot.Start();
+                return bot;
+            }
+            catch (Exception ex)
+            {
+                e._log.Write(LogLevel.Warn, "자동운용", $"{name}: 봇 추가 실패 — {ex.Message}");
+                return null;
+            }
+        }
+
+        public void RemoveBot(TradingBot bot)
+        {
+            if (bot.HasPosition || bot.HasWorkingOrders) return;
+            e._bots.Remove(bot);
+            if (e._focus == bot.Symbol) e._focus = e._bots.FirstOrDefault()?.Symbol;
+            e.RecomputeSubscriptions();
+        }
+
+        public void Log(LogLevel level, string message) => e._log.Write(level, "자동운용", message);
+    }
 
     private Task WithBot(string id, Action<TradingBot> action) => Invoke(() => { action(FindBot(id)); return true; });
 
@@ -493,6 +562,7 @@ public sealed class TradingEngine : IBotHost, IAsyncDisposable
         {
             _lastSecond = now;
             foreach (var bot in _bots) bot.OnTimer();
+            _autoPilot.OnTimer();
             var followBefore = _analytics.ActiveFollowUps;
             _analytics.OnTimer(now, sym => _contexts.TryGetValue(sym, out var c) ? c : null);
             if (_analytics.ActiveFollowUps != followBefore) RecomputeSubscriptions();
@@ -761,7 +831,7 @@ public sealed class TradingEngine : IBotHost, IAsyncDisposable
                 b.State, $"{b.State.ToKorean()} · {b.StateReason}", b.Quantity, b.AveragePrice, b.Context.LastPrice, b.StopPrice,
                 b.UnrealizedNet, cost > 0 ? b.UnrealizedNet / cost * 100m : 0, b.RealizedNet, target,
                 target > 0 ? Math.Clamp(b.RealizedNet / target, -1, 1) : 0,
-                b.Entries, b.Settings.MaxEntries, b.Wins, b.Losses, b.PendingSignalText, b.Settings.Clone());
+                b.Entries, b.Settings.MaxEntries, b.Wins, b.Losses, b.PendingSignalText, b.Settings.Clone(), b.AutoRole);
         }).ToList();
 
         var unrealized = _bots.Sum(b => b.UnrealizedNet);
@@ -772,7 +842,8 @@ public sealed class TradingEngine : IBotHost, IAsyncDisposable
             _risk.BlockReason(now, unrealized) is not null, _risk.BlockReason(now, unrealized), _risk.KillSwitchActive);
 
         _snapshot = new EngineSnapshot(now, true, _feedConnected, _status, _options.Execution, _options.DataSource,
-            account, risk, bots, _candidates, _closed.ToList(), _log.Recent(), BuildChart());
+            account, risk, bots, _candidates, _closed.ToList(), _log.Recent(), BuildChart(),
+            _autoPilot.View(_scanOverride ?? _scannerBase.Mode));
     }
 
     private ChartView? BuildChart()

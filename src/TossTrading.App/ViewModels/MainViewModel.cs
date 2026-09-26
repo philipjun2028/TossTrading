@@ -27,6 +27,7 @@ public sealed class MainViewModel : ViewModelBase
         ChartTitle = "차트: 종목을 선택하세요";
         SelectedPreset = PresetNames.FirstOrDefault();
         ScannerMode = Settings.Scanner.Mode;
+        AutoPilotEnabled = Settings.AutoPilot.Enabled;
 
         StartCommand = new AsyncCommand(StartAsync);
         StopCommand = new AsyncCommand(StopAsync);
@@ -89,15 +90,42 @@ public sealed class MainViewModel : ViewModelBase
             Settings.Scanner.Mode = value;
             SettingsStore.Save(Settings);
             Engine?.UpdateScanner(Settings.Scanner.Clone());
-            RaisePropertyChanged(nameof(IsClosingMode));
-            RaisePropertyChanged(nameof(IsDayMode));
-            RaisePropertyChanged(nameof(ScannerHeader));
+            RaiseScanModeChanged();
             if (value == ScanMode.ClosingBet && Settings.Presets.ContainsKey(ClosingPresetName)) SelectedPreset = ClosingPresetName;
             else if (value == ScanMode.DayTrading && SelectedPreset == ClosingPresetName) SelectedPreset = PresetNames.FirstOrDefault();
         });
     }
 
-    public bool IsClosingMode => ScannerMode == ScanMode.ClosingBet;
+    /// <summary>화면에 보이는 스캐너 모드. 자동 운용 중에는 엔진이 시간대에 맞춰 바꾼 모드를 따른다.</summary>
+    public bool IsClosingMode => (AutoPilotEnabled && _engineScanMode is { } m ? m : ScannerMode) == ScanMode.ClosingBet;
+
+    private ScanMode? _engineScanMode;
+
+    // ---------------------------------------------------------------- 자동 운용
+    /// <summary>자동 운용 켜기/끄기. 엔진 실행 중이면 즉시 반영.</summary>
+    public bool AutoPilotEnabled
+    {
+        get => GetValue<bool>();
+        set => SetValue(value, () =>
+        {
+            Settings.AutoPilot.Enabled = value;
+            SettingsStore.Save(Settings);
+            RaisePropertyChanged(nameof(CanChangeScanMode));
+            RaiseScanModeChanged();
+            if (Engine is not null) _ = Run(() => Engine.SetAutoPilotAsync(Settings.AutoPilotPlan()));
+            if (!value) AutoPilotStatus = "";
+        });
+    }
+
+    public bool CanChangeScanMode => !AutoPilotEnabled;
+    public string AutoPilotStatus { get => GetValue<string>(); private set => SetValue(value); }
+
+    private void RaiseScanModeChanged()
+    {
+        RaisePropertyChanged(nameof(IsClosingMode));
+        RaisePropertyChanged(nameof(IsDayMode));
+        RaisePropertyChanged(nameof(ScannerHeader));
+    }
     public bool IsDayMode => !IsClosingMode;
 
     public string ScannerHeader => IsClosingMode
@@ -322,6 +350,7 @@ public sealed class MainViewModel : ViewModelBase
         {
             await Run(() => Engine.UpdateRiskAsync(Settings.Risk.Clone()));
             Engine.UpdateScanner(Settings.Scanner.Clone());
+            await Run(() => Engine.SetAutoPilotAsync(Settings.AutoPilotPlan()));
         }
     }
 
@@ -376,6 +405,16 @@ public sealed class MainViewModel : ViewModelBase
         PositionsText = $"{s.Risk.OpenPositions} / {s.Risk.MaxPositions}";
         BlockReason = s.Risk.BlockReason;
         KillSwitchActive = s.Risk.KillSwitchActive;
+
+        if (s.AutoPilot is { } ap)
+        {
+            AutoPilotStatus = ap.Enabled ? $"🤖 {ap.Phase} · {ap.Status}" : "";
+            if (_engineScanMode != ap.ScanMode)
+            {
+                _engineScanMode = ap.ScanMode;
+                RaiseScanModeChanged();
+            }
+        }
 
         Sync(Candidates, s.Candidates, c => c.Symbol, c => new CandidateRow(c.Symbol), (row, c) => row.Update(c), r => r.Symbol, reorder: true);
         Sync(Bots, s.Bots, b => b.Id, b => new BotRow(b.Id), (row, b) => row.Update(b), r => r.Id, reorder: false);

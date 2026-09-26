@@ -65,7 +65,8 @@ public sealed record BotView(
     int Wins,
     int Losses,
     string? PendingSignal,
-    BotSettings Settings);
+    BotSettings Settings,
+    string? AutoRole = null);
 
 public sealed record AccountView(decimal Equity, decimal Cash, decimal StartEquity, decimal RealizedNet, decimal UnrealizedNet, decimal Exposure);
 
@@ -95,7 +96,8 @@ public sealed record EngineSnapshot(
     IReadOnlyList<ScanCandidate> Candidates,
     IReadOnlyList<ClosedTrade> Trades,
     IReadOnlyList<LogEntry> Logs,
-    ChartView? Chart)
+    ChartView? Chart,
+    Automation.AutoPilotView? AutoPilot = null)
 {
     public static readonly EngineSnapshot Empty = new(
         DateTimeOffset.MinValue, false, false, "중지됨", ExecutionMode.Paper, DataSourceKind.Simulation,

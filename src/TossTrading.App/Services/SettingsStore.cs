@@ -25,6 +25,11 @@ public sealed class AppSettings
     public CostSettings Cost { get; set; } = new();
     public Dictionary<string, BotSettings> Presets { get; set; } = BotPresets.CreateDefaults();
 
+    /// <summary>자동 운용 (종목 자동 선정 + 단타 → 종가매매 자동 전환)</summary>
+    public AutoPilotSettings AutoPilot { get; set; } = new();
+
+    public AutoPilotPlan AutoPilotPlan() => Domain.AutoPilotPlan.FromPresets(AutoPilot, Presets);
+
     public decimal PaperStartingCash { get; set; } = 10_000_000m;
     public decimal CapitalOverride { get; set; }
     public double SimulationSpeed { get; set; } = 10;

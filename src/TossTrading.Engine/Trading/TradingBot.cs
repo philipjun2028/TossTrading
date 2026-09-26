@@ -41,7 +41,8 @@ public sealed record BotPersistState(
     decimal RealizedNet, int Entries, int Wins, int Losses,
     decimal TradeBuyQty, decimal TradeBuyValue, decimal TradeSellQty, decimal TradeSellValue, decimal TradeNet, string EntryReason,
     DateOnly SavedDate,
-    TradeTrack? Track = null);
+    TradeTrack? Track = null,
+    string? AutoRole = null);
 
 /// <summary>
 /// 종목 1개를 담당하는 봇. 상태 머신 (설계 문서 8.5) + 청산 규칙 (6.2).
@@ -102,6 +103,9 @@ public sealed class TradingBot
     public BotState State { get; private set; } = BotState.Idle;
     public string StateReason { get; private set; } = "";
 
+    /// <summary>자동 운용이 만든 봇이면 역할(단타/종가), 사용자가 만든 봇이면 null</summary>
+    public string? AutoRole { get; set; }
+
     // 포지션
     public decimal Quantity { get; private set; }
     public decimal AveragePrice { get; private set; }
@@ -145,7 +149,7 @@ public sealed class TradingBot
         Quantity, AveragePrice, InitialStop, StopPrice, PeakPrice, EntryTime, PartialTaken, _stopKind,
         RealizedNet, Entries, Wins, Losses,
         _tradeBuyQty, _tradeBuyValue, _tradeSellQty, _tradeSellValue, _tradeNet, _entryReason,
-        Kst.DateOf(_host.Now), _track);
+        Kst.DateOf(_host.Now), _track, AutoRole);
 
     /// <summary>
     /// 저장된 상태로 봇을 되살린다. 날짜가 바뀌었으면 당일 통계(실현손익·진입 횟수·승패)는 새로 시작하고,
@@ -171,6 +175,7 @@ public sealed class TradingBot
         bot._tradeNet = st.TradeNet;
         bot._entryReason = st.EntryReason;
         bot._track = st.Track;
+        bot.AutoRole = st.AutoRole;
 
         var sameDay = st.SavedDate == Kst.DateOf(host.Now);
         if (sameDay)

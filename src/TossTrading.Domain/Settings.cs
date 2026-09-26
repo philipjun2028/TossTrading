@@ -224,3 +224,90 @@ public static class BotPresets
         },
     };
 }
+
+/// <summary>
+/// 자동 운용 (종목 자동 선정 + 자동 매매). 장중에는 단타 후보를 골라 단타 봇을 돌리고,
+/// 종가매매 시간이 되면 단타를 정리하고 종가 후보를 골라 종가 베팅(익일 매도)을 진행한다.
+/// </summary>
+public sealed class AutoPilotSettings
+{
+    public bool Enabled { get; set; }
+
+    // ---- 단타 ----
+    public bool DayTradingEnabled { get; set; } = true;
+
+    /// <summary>단타 봇 선정 시작 (장 초반 변동성 회피용 여유)</summary>
+    public TimeOnly DayStartTime { get; set; } = new(9, 5);
+
+    /// <summary>이 시각 전에 추가되는 봇은 오전 프리셋(ORB 등), 이후는 장중 프리셋(VWAP 눌림 등)</summary>
+    public TimeOnly MorningUntil { get; set; } = new(10, 0);
+
+    /// <summary>단타 신규 진입 마감</summary>
+    public TimeOnly DayEntryEndTime { get; set; } = new(14, 30);
+
+    /// <summary>단타 보유분 정리 (종가매매 자금 확보)</summary>
+    public TimeOnly DayExitTime { get; set; } = new(14, 50);
+
+    public int MaxDayBots { get; set; } = 3;
+
+    /// <summary>단타 후보 최소 점수 (0 = 제한 없음)</summary>
+    public decimal MinDayScore { get; set; } = 50m;
+
+    /// <summary>이 시간 동안 진입이 없고 상위 후보에서 밀려난 단타 봇은 다른 종목으로 교체 (0 = 교체 안 함)</summary>
+    public int IdleReplaceMinutes { get; set; } = 30;
+
+    public string MorningPreset { get; set; } = "ORB 표준";
+    public string DayPreset { get; set; } = "VWAP 눌림 표준";
+
+    // ---- 종가매매 ----
+    public bool ClosingEnabled { get; set; } = true;
+
+    /// <summary>스캐너를 종가매매 후보 모드로 전환 (분봉 수집에 여유를 둔다)</summary>
+    public TimeOnly ClosingScanTime { get; set; } = new(14, 40);
+
+    /// <summary>종가 봇 선정 시작 / 마감 (진입 자체는 종가베팅 전략이 15:00~15:19 에 판단)</summary>
+    public TimeOnly ClosingSelectTime { get; set; } = new(14, 55);
+    public TimeOnly ClosingSelectEndTime { get; set; } = new(15, 15);
+
+    public int MaxClosingBots { get; set; } = 2;
+
+    /// <summary>종가 후보 조건 최소 통과 수 (0 = 전부 통과)</summary>
+    public int ClosingMinPassed { get; set; }
+
+    public string ClosingPreset { get; set; } = "종가베팅 (익일 매도)";
+
+    public AutoPilotSettings Clone() => (AutoPilotSettings)MemberwiseClone();
+
+    public IReadOnlyList<string> Validate()
+    {
+        var e = new List<string>();
+        if (!(DayStartTime < DayEntryEndTime && DayEntryEndTime <= DayExitTime))
+            e.Add("자동 운용: 단타 시작 < 신규 진입 마감 ≤ 단타 정리 순서여야 합니다.");
+        if (!(ClosingScanTime <= ClosingSelectTime && ClosingSelectTime < ClosingSelectEndTime && ClosingSelectEndTime < BotSettings.MarketCloseAuction))
+            e.Add("자동 운용: 종가 스캔 ≤ 종가 선정 시작 < 선정 마감 < 15:20 순서여야 합니다.");
+        if (DayTradingEnabled && ClosingEnabled && DayExitTime > ClosingSelectTime)
+            e.Add("자동 운용: 단타 정리 시각이 종가 선정 시작보다 늦으면 자금이 겹칩니다.");
+        if (MaxDayBots < 0 || MaxClosingBots < 0) e.Add("자동 운용: 봇 수는 0 이상이어야 합니다.");
+        return e;
+    }
+}
+
+/// <summary>자동 운용 설정 + 실제로 사용할 봇 설정 (프리셋 이름을 풀어 둔 것)</summary>
+public sealed record AutoPilotPlan(AutoPilotSettings Settings, BotSettings Morning, BotSettings Day, BotSettings Closing)
+{
+    public static AutoPilotPlan Default(bool enabled = false) =>
+        FromPresets(new AutoPilotSettings { Enabled = enabled }, BotPresets.CreateDefaults());
+
+    /// <summary>프리셋 이름으로 봇 설정을 찾는다. 없거나 맞지 않으면 기본 프리셋을 쓴다.</summary>
+    public static AutoPilotPlan FromPresets(AutoPilotSettings s, IReadOnlyDictionary<string, BotSettings> presets)
+    {
+        var defaults = BotPresets.CreateDefaults();
+        BotSettings Pick(string name, string fallback, Func<BotSettings, bool> ok) =>
+            (presets.TryGetValue(name, out var p) && ok(p) ? p : defaults[fallback]).Clone();
+
+        var day = Pick(s.MorningPreset, "ORB 표준", p => p.Strategy is not (EntryStrategyKind.Manual or EntryStrategyKind.ClosingBet));
+        var day2 = Pick(s.DayPreset, "VWAP 눌림 표준", p => p.Strategy is not (EntryStrategyKind.Manual or EntryStrategyKind.ClosingBet));
+        var closing = Pick(s.ClosingPreset, "종가베팅 (익일 매도)", p => p.Strategy == EntryStrategyKind.ClosingBet);
+        return new AutoPilotPlan(s.Clone(), day, day2, closing);
+    }
+}

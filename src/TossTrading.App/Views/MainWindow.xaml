@@ -45,6 +45,9 @@
                                       EditValue="{Binding Execution}" IsEnabled="{Binding CanEditMode}" />
                     <Button Content="▶ 시작" Command="{Binding StartCommand}" Margin="10,3,3,3" Padding="12,4" FontWeight="SemiBold" />
                     <Button Content="■ 중지" Command="{Binding StopCommand}" Margin="3" Padding="12,4" />
+                    <dxe:CheckEdit Content="🤖 자동 운용" IsChecked="{Binding AutoPilotEnabled}" Margin="14,3,3,3" FontWeight="SemiBold" VerticalAlignment="Center"
+                                   ToolTip="켜면 장중에는 단타 후보를 자동으로 골라 단타 봇을 돌리고, 14:50 단타 정리 후 종가매매 후보를 골라 종가베팅(익일 매도)을 자동 진행합니다. 시간·봇 수·프리셋은 [설정 → 자동 운용]" />
+                    <TextBlock Text="{Binding AutoPilotStatus}" Margin="6,0" VerticalAlignment="Center" Foreground="#FF22C55E" />
                     <TextBlock Text="{Binding Status}" Margin="12,0" Foreground="{StaticResource SubText}" VerticalAlignment="Center" />
                 </StackPanel>
                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
@@ -125,7 +128,8 @@
                         <TextBlock Text="모드" Style="{StaticResource Caption}" Margin="4,0" />
                         <dxe:ComboBoxEdit Width="180" Margin="3" IsTextEditable="False"
                                           ItemsSource="{Binding ScanModeOptions}" DisplayMember="Label" ValueMember="Value"
-                                          EditValue="{Binding ScannerMode}" />
+                                          EditValue="{Binding ScannerMode}" IsEnabled="{Binding CanChangeScanMode}"
+                                          ToolTip="자동 운용 중에는 시간대에 따라 자동으로 바뀝니다" />
                         <TextBlock Margin="8,0" Foreground="{StaticResource SubText}" FontSize="11" TextWrapping="Wrap" VerticalAlignment="Center"
                                    Visibility="{Binding IsClosingMode, Converter={StaticResource BoolToVis}}"
                                    Text="14:30 이후 사용 권장. ✔ 통과 ✖ 실패 ? 데이터 없음 · 상위 종목에 '종가베팅' 프리셋으로 봇 추가 → 15:00~15:19 에 봇이 조건 재확인 후 매수" />
@@ -223,6 +227,7 @@
                     <dxg:GridControl ItemsSource="{Binding Bots}" SelectedItem="{Binding SelectedBot}" AutoGenerateColumns="None">
                         <dxg:GridControl.Columns>
                             <dxg:GridColumn FieldName="Name" Header="종목" Width="100" />
+                            <dxg:GridColumn FieldName="Origin" Header="구분" Width="60" />
                             <dxg:GridColumn FieldName="Strategy" Header="전략" Width="60" />
                             <dxg:GridColumn FieldName="Mode" Header="모드" Width="60" />
                             <dxg:GridColumn FieldName="StateText" Header="상태" Width="160" />

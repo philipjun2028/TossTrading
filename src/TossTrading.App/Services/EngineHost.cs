@@ -44,6 +44,7 @@ public sealed class EngineHost : IAsyncDisposable
             CapitalOverride = s.CapitalOverride,
             OrderRatePerSecond = s.OrderRatePerSecond,
             OpeningOrderRatePerSecond = s.OpeningOrderRatePerSecond,
+            AutoPilot = s.AutoPilotPlan(),
             // 익일 보유(종가매매) 포지션을 재시작 후에도 이어서 관리. 시뮬레이션은 종목이 매번 바뀌므로 저장 안 함
             StateDirectory = s.DataSource == DataSourceKind.Toss ? StateDirectory : null,
         };

@@ -55,6 +55,9 @@ public sealed class BotRow : BindableBase
     public string Name { get => GetValue<string>(); set => SetValue(value); }
     public string Strategy { get => GetValue<string>(); set => SetValue(value); }
     public string Mode { get => GetValue<string>(); set => SetValue(value); }
+
+    /// <summary>자동 운용이 만든 봇인지 (🤖 단타 / 🤖 종가 / 수동)</summary>
+    public string Origin { get => GetValue<string>(); set => SetValue(value); }
     public BotState State { get => GetValue<BotState>(); set => SetValue(value); }
     public string StateText { get => GetValue<string>(); set => SetValue(value); }
     public decimal Quantity { get => GetValue<decimal>(); set => SetValue(value); }
@@ -78,6 +81,7 @@ public sealed class BotRow : BindableBase
         Name = v.Name;
         Strategy = v.Strategy;
         Mode = v.Mode switch { BotMode.ManualEntry => "수동진입", BotMode.SemiAuto => "반자동", _ => "완전자동" };
+        Origin = v.AutoRole switch { "day" => "🤖 단타", "closing" => "🤖 종가", _ => "수동" };
         State = v.State;
         StateText = v.StateText;
         Quantity = v.Quantity;

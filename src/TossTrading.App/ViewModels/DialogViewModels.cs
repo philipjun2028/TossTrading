@@ -124,6 +124,7 @@ public sealed class SettingsViewModel : ViewModelBase
 
     public AppSettings Settings { get; }
     public bool EngineRunning { get; }
+    public IReadOnlyList<string> PresetNames => Settings.Presets.Keys.ToList();
     public bool HasSavedSecret => !string.IsNullOrEmpty(Settings.TossClientSecretProtected);
 
     /// <summary>새로 입력한 Secret (비어 있으면 기존 저장값 유지)</summary>
@@ -182,6 +183,12 @@ public sealed class SettingsViewModel : ViewModelBase
 
     private void Save()
     {
+        var errors = Settings.AutoPilot.Validate();
+        if (errors.Count > 0)
+        {
+            DXMessageBox.Show(string.Join("\n", errors), "설정 확인", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
         if (!string.IsNullOrEmpty(NewClientSecret)) Settings.TossClientSecret = NewClientSecret;
         Settings.TossAccountSeq = AccountSeq;
         RequestClose?.Invoke(true);
