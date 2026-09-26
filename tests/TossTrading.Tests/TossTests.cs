@@ -182,6 +182,26 @@ public class TossRestClientTests
     }
 
     [Fact]
+    public async Task LatestSessionBarsKeepOnlyMostRecentTradingDay()
+    {
+        var (client, handler) = Create();
+        handler.Respond = req => req.RequestUri!.AbsolutePath == "/oauth2/token"
+            ? FakeHandler.Json("""{"access_token":"t","expires_in":3600}""")
+            : FakeHandler.Json("""
+                {"result":{"candles":[
+                  {"timestamp":"2026-09-25T15:29:00+09:00","openPrice":"100","highPrice":"101","lowPrice":"99","closePrice":"100","volume":"5","currency":"KRW"},
+                  {"timestamp":"2026-09-25T15:28:00+09:00","openPrice":"100","highPrice":"101","lowPrice":"99","closePrice":"100","volume":"5","currency":"KRW"},
+                  {"timestamp":"2026-09-24T15:29:00+09:00","openPrice":"90","highPrice":"91","lowPrice":"89","closePrice":"90","volume":"5","currency":"KRW"}],
+                 "nextBefore":"2026-09-24T15:28:00+09:00"}}
+                """);
+        var source = new TossMarketDataSource(client);
+        var bars = await source.GetLatestSessionMinuteBarsAsync("005930", TestContext.Current.CancellationToken);
+        Assert.Equal(2, bars.Count);
+        Assert.All(bars, b => Assert.Equal(new DateOnly(2026, 9, 25), Kst.DateOf(b.Start)));
+        Assert.True(bars[0].Start < bars[1].Start);
+    }
+
+    [Fact]
     public async Task HoldingsAndOrdersMapToDomain()
     {
         var (client, handler) = Create();

@@ -91,6 +91,24 @@ public sealed class TossMarketDataSource : IMarketDataSource
         return bars.OrderBy(b => b.Start).ToList();
     }
 
+    public async Task<IReadOnlyList<Bar>> GetLatestSessionMinuteBarsAsync(string symbol, CancellationToken ct)
+    {
+        var bars = new List<Bar>();
+        DateOnly? session = null;
+        DateTimeOffset? before = null;
+        for (var page = 0; page < 3; page++)
+        {
+            var p = await _rest.GetCandlesAsync(symbol, "1m", 200, before, ct).ConfigureAwait(false);
+            if (p.Candles.Count == 0) break;
+            session ??= Kst.DateOf(p.Candles.Max(c => c.Timestamp)); // 가장 최근 봉의 날짜 = 최근 거래일
+            var sameDay = p.Candles.Where(c => Kst.DateOf(c.Timestamp) == session).ToList();
+            bars.AddRange(sameDay.Select(TossMapper.ToBar));
+            if (p.NextBefore is null || sameDay.Count < p.Candles.Count) break;
+            before = p.NextBefore;
+        }
+        return bars.OrderBy(b => b.Start).ToList();
+    }
+
     public async Task<IReadOnlyList<Bar>> GetDailyBarsAsync(string symbol, int count, CancellationToken ct)
     {
         var p = await _rest.GetCandlesAsync(symbol, "1d", Math.Min(count + 1, 200), null, ct).ConfigureAwait(false);

@@ -325,6 +325,9 @@ public sealed class SimulatedMarket : IMarketDataFeed, IMarketDataSource, IClock
         }
     }
 
+    public Task<IReadOnlyList<Bar>> GetLatestSessionMinuteBarsAsync(string symbol, CancellationToken ct) =>
+        GetTodayMinuteBarsAsync(symbol, ct);
+
     public Task<IReadOnlyList<Bar>> GetDailyBarsAsync(string symbol, int count, CancellationToken ct)
     {
         lock (_lock)

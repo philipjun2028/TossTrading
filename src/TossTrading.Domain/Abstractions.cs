@@ -48,6 +48,12 @@ public interface IMarketDataSource
     /// <summary>오늘 1분봉 (오래된 것부터 정렬)</summary>
     Task<IReadOnlyList<Bar>> GetTodayMinuteBarsAsync(string symbol, CancellationToken ct);
 
+    /// <summary>
+    /// 가장 최근 거래일의 1분봉 (오래된 것부터). 장중이면 오늘, 휴장일·장 시작 전이면 직전 거래일.
+    /// 스캐너 평가용 — 엔진의 당일 상태 복원에는 쓰지 않는다.
+    /// </summary>
+    Task<IReadOnlyList<Bar>> GetLatestSessionMinuteBarsAsync(string symbol, CancellationToken ct);
+
     /// <summary>최근 일봉 (오래된 것부터, 오늘 제외)</summary>
     Task<IReadOnlyList<Bar>> GetDailyBarsAsync(string symbol, int count, CancellationToken ct);
 

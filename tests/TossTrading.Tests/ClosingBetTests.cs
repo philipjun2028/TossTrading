@@ -314,6 +314,21 @@ public class ClosingScannerTests
     }
 
     [Fact]
+    public void ComputeIntradayOnClosedDayUsesLastSession()
+    {
+        var friday = new DateOnly(2026, 9, 25);
+        var bars = Enumerable.Range(0, 390).Select(i => new Bar
+        {
+            Start = Kst.At(friday, new TimeOnly(9, 0).AddMinutes(i)),
+            Open = 10_000m, High = 10_000m + i, Low = 10_000m, Close = 10_000m + i, Volume = 10,
+        }).ToList();
+        var saturday = Kst.At(friday.AddDays(1), new TimeOnly(11, 0));
+        var st = TossTrading.Engine.Scanning.ScannerService.ComputeIntraday(bars, saturday)!;
+        Assert.Equal(friday, st.SessionDate);
+        Assert.Equal(10_360m, st.Close30mAgo); // 장 마감(15:30) 기준 30분 전 = 15:00 봉
+    }
+
+    [Fact]
     public async Task ClosingModeEvaluatesAllCandidatesWithoutLiveData()
     {
         var sim = new SimulatedMarket(new SimulationOptions { Seed = 42, ManualClock = true, StartTime = new TimeOnly(9, 0) });

@@ -24,6 +24,7 @@ public sealed class ScannerService : IAsyncDisposable
     private readonly ConcurrentDictionary<string, IReadOnlyList<StockWarning>> _warnings = new();
     private readonly ConcurrentDictionary<string, decimal> _avgDailyVolume = new();
     private readonly ConcurrentDictionary<string, IntradayStats> _intraday = new();
+    private int _intradayErrors;
     private CancellationTokenSource? _cts;
     private Task? _loop;
     private volatile ScannerSettings _settings;
@@ -138,8 +139,16 @@ public sealed class ScannerService : IAsyncDisposable
                 .Select(x => x.Sym).ToList();
             foreach (var sym in targets)
             {
-                var bars = await _source.GetTodayMinuteBarsAsync(sym, ct).ConfigureAwait(false);
-                if (ComputeIntraday(bars, now) is { } stats) _intraday[sym] = stats;
+                try
+                {
+                    var bars = await _source.GetLatestSessionMinuteBarsAsync(sym, ct).ConfigureAwait(false);
+                    if (ComputeIntraday(bars, now) is { } stats) _intraday[sym] = stats;
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    // 한 종목 실패로 스캔 전체가 멈추지 않도록. 다음 주기에 다시 시도
+                    if (_intradayErrors++ % 20 == 0) _log(LogLevel.Warn, $"분봉 조회 실패 {sym}: {ex.Message}");
+                }
             }
         }
 
@@ -187,6 +196,7 @@ public sealed class ScannerService : IAsyncDisposable
                 decimal? trend = intra?.Close30mAgo is > 0 ? (e.LastPrice / intra.Close30mAgo.Value - 1m) * 100m : null;
                 var eval = EvaluateClosing(change, rangePos, dist, trend, live?.Strength, e.TradingAmount, s);
                 if (intra is null && live is null) tags.Add("분봉대기");
+                else if (live is null && intra is not null && intra.SessionDate < Kst.DateOf(now)) tags.Add($"직전장({intra.SessionDate:MM/dd})");
                 if (eval.AllPassed) tags.Add("종가후보");
                 result.Add(new ScanCandidate(e.Symbol, name, e.LastPrice, change, e.TradingAmount, rvol, live?.Strength,
                     tickCost, live?.SpreadTicks, dist, rangePos, eval.Score, string.Join(" ", tags),
@@ -227,7 +237,7 @@ public sealed class ScannerService : IAsyncDisposable
     // ================================================================ 종가매매 평가
 
     /// <summary>당일 분봉 요약: 고가·저가·VWAP·30분 전 종가</summary>
-    public sealed record IntradayStats(decimal High, decimal Low, decimal Vwap, decimal? Close30mAgo, DateTimeOffset FetchedAt);
+    public sealed record IntradayStats(decimal High, decimal Low, decimal Vwap, decimal? Close30mAgo, DateTimeOffset FetchedAt, DateOnly SessionDate);
 
     public static IntradayStats? ComputeIntraday(IReadOnlyList<Bar> bars, DateTimeOffset now)
     {
@@ -240,9 +250,12 @@ public sealed class ScannerService : IAsyncDisposable
             vol += b.Volume;
             val += b.Value > 0 ? b.Value : b.TypicalPrice * b.Volume;
         }
-        var cutoff = now.AddMinutes(-30);
+        // 장이 끝났거나 휴장일이면 "지금"이 아니라 마지막 봉 기준으로 30분 전을 찾는다
+        var lastEnd = bars[^1].Start.AddMinutes(1);
+        var reference = lastEnd < now ? lastEnd : now;
+        var cutoff = reference.AddMinutes(-30);
         var ago = bars.LastOrDefault(b => b.Start <= cutoff);
-        return new IntradayStats(hi, lo, vol > 0 ? val / vol : bars[^1].Close, ago?.Close, now);
+        return new IntradayStats(hi, lo, vol > 0 ? val / vol : bars[^1].Close, ago?.Close, now, Kst.DateOf(bars[^1].Start));
     }
 
     public static decimal? RangePositionOf(decimal price, IntradayStats? s)
