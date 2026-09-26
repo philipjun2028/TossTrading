@@ -52,6 +52,8 @@
                 </StackPanel>
                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
                     <TextBlock Text="{Binding Clock}" FontSize="15" FontWeight="SemiBold" Margin="10,0" VerticalAlignment="Center" />
+                    <Button Content="📈 백테스트" Command="{Binding OpenBacktestCommand}" Margin="3" Padding="12,4"
+                            ToolTip="기간을 정해 과거 데이터로 자동 운용(단타→종가매매)을 돌려보고 거래 내역·수익률·수익금을 봅니다" />
                     <Button Content="📊 성과 분석" Command="{Binding OpenAnalysisCommand}" Margin="3" Padding="12,4"
                             ToolTip="거래 기록으로 전략·진입조건·청산별 성과와 개선 제안을 봅니다" />
                     <Button Content="⚙ 설정" Command="{Binding OpenSettingsCommand}" Margin="3" Padding="12,4" />

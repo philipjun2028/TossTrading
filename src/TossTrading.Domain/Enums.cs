@@ -33,7 +33,8 @@ public enum OrderPriority
 
 public enum ExecutionMode { Paper, Live }
 
-public enum DataSourceKind { Simulation, Toss }
+/// <summary>시세 출처. Backtest = 과거 데이터 재생 (백테스트 전용, 앱 실시간 모드에서는 선택 불가)</summary>
+public enum DataSourceKind { Simulation, Toss, Backtest }
 
 /// <summary>봇 운용 모드 (설계 문서 2.2)</summary>
 public enum BotMode

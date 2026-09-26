@@ -50,6 +50,11 @@ public sealed class OrderManager : IAsyncDisposable
 
     public int QueueLength { get { lock (_lock) return _queue.Count; } }
 
+    private int _busy;
+
+    /// <summary>대기·처리 중·재시도 예약된 작업이 하나도 없음 (백테스트에서 한 단계가 끝났는지 판단)</summary>
+    public bool IsIdle { get { lock (_lock) return _queue.Count == 0 && Volatile.Read(ref _busy) == 0; } }
+
     public void Start() => _worker ??= Task.Run(() => RunAsync(_cts.Token));
 
     public void Enqueue(OrderJob job)
@@ -71,7 +76,11 @@ public sealed class OrderManager : IAsyncDisposable
             catch (OperationCanceledException) { break; }
 
             OrderJob? job;
-            lock (_lock) { if (!_queue.TryDequeue(out job, out _)) continue; }
+            lock (_lock)
+            {
+                if (!_queue.TryDequeue(out job, out _)) continue;
+                Interlocked.Increment(ref _busy);
+            }
 
             try
             {
@@ -85,6 +94,10 @@ public sealed class OrderManager : IAsyncDisposable
             {
                 _log(LogLevel.Error, $"주문 처리 예외: {ex.Message}");
                 _onResult(new OrderJobResult(job, null, ex.Message));
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _busy);
             }
         }
     }
@@ -148,8 +161,10 @@ public sealed class OrderManager : IAsyncDisposable
 
     private async Task RequeueLaterAsync(OrderJob job, TimeSpan delay, CancellationToken ct)
     {
+        Interlocked.Increment(ref _busy); // 재시도 대기 중에도 "할 일 있음"으로 본다
         try { await Task.Delay(delay, ct).ConfigureAwait(false); Enqueue(job); }
         catch (OperationCanceledException) { }
+        finally { Interlocked.Decrement(ref _busy); }
     }
 
     private async Task RunWithRetryAsync(OrderJob job, Func<Task<OrderAck>> action, int maxAttempts, CancellationToken ct)

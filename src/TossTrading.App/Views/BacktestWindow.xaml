@@ -1,0 +1,180 @@
+<dx:ThemedWindow x:Class="TossTrading.App.Views.BacktestWindow"
+                 xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                 xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                 xmlns:sys="clr-namespace:System;assembly=mscorlib"
+                 xmlns:dx="http://schemas.devexpress.com/winfx/2008/xaml/core"
+                 xmlns:dxe="http://schemas.devexpress.com/winfx/2008/xaml/editors"
+                 xmlns:dxg="http://schemas.devexpress.com/winfx/2008/xaml/grid"
+                 xmlns:dxc="http://schemas.devexpress.com/winfx/2008/xaml/charts"
+                 Title="백테스트 · 과거 데이터로 자동 운용 검증" Width="1280" Height="880" WindowStartupLocation="CenterOwner"
+                 FontFamily="Malgun Gothic">
+    <DockPanel Margin="10">
+        <!-- 입력 -->
+        <GroupBox DockPanel.Dock="Top" Header="조건 (봇 프리셋·리스크·스캐너·자동 운용 시각은 현재 설정을 사용)">
+            <StackPanel>
+                <WrapPanel>
+                    <TextBlock Text="기간" VerticalAlignment="Center" Margin="4,0" />
+                    <dxe:DateEdit Width="120" Margin="3" EditValue="{Binding FromDate}" IsEnabled="{Binding IsIdle}" />
+                    <TextBlock Text="~" VerticalAlignment="Center" />
+                    <dxe:DateEdit Width="120" Margin="3" EditValue="{Binding ToDate}" IsEnabled="{Binding IsIdle}" />
+                    <TextBlock Text="데이터" VerticalAlignment="Center" Margin="12,0,4,0" />
+                    <dxe:ComboBoxEdit Width="230" Margin="3" IsTextEditable="False" ItemsSource="{Binding SourceOptions}"
+                                      DisplayMember="Label" ValueMember="Value" EditValue="{Binding Source}" />
+                    <TextBlock Text="시작 자금" VerticalAlignment="Center" Margin="12,0,4,0" />
+                    <dxe:SpinEdit Width="140" Margin="3" EditValue="{Binding StartingCash}" EditValueType="{x:Type sys:Decimal}"
+                                  Increment="1000000" MinValue="100000" DisplayFormatString="N0" />
+                    <dxe:CheckEdit Content="단타" IsChecked="{Binding DayTradingEnabled}" Margin="12,3,3,3" VerticalAlignment="Center" />
+                    <dxe:CheckEdit Content="종가매매" IsChecked="{Binding ClosingEnabled}" Margin="3" VerticalAlignment="Center" />
+                    <TextBlock Text="하루 최대 종목" VerticalAlignment="Center" Margin="12,0,4,0"
+                               ToolTip="그날 고가 기준 등락률·거래대금 조건을 넘은 종목 중 거래대금 상위 N개의 분봉을 받아 재생합니다" />
+                    <dxe:SpinEdit Width="70" Margin="3" EditValue="{Binding MaxSymbolsPerDay}" EditValueType="{x:Type sys:Int32}"
+                                  Increment="5" MinValue="5" MaxValue="150" IsFloatValue="False" />
+                </WrapPanel>
+                <DockPanel Margin="0,2,0,0">
+                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                        <Button Content="▶ 실행" Command="{Binding RunCommand}" Margin="3" Padding="18,4" FontWeight="SemiBold" />
+                        <Button Content="■ 취소" Command="{Binding CancelCommand}" Margin="3" Padding="12,4" />
+                        <Button Content="📂 결과 폴더" Command="{Binding OpenFolderCommand}" Margin="3" Padding="10,4" />
+                    </StackPanel>
+                    <TextBlock Text="추가 종목 코드" VerticalAlignment="Center" Margin="4,0" />
+                    <dxe:TextEdit Margin="3" EditValue="{Binding ExtraSymbols, UpdateSourceTrigger=PropertyChanged}"
+                                  NullText="예) 005930, 000660 — 과거 순위는 조회가 안 돼 현재 상위 종목 + 여기 적은 종목이 대상" />
+                </DockPanel>
+                <DockPanel Margin="0,4,0,0">
+                    <dxe:ProgressBarEdit DockPanel.Dock="Left" Width="260" Height="16" Margin="4,0" Minimum="0" Maximum="100" EditValue="{Binding Progress, Mode=OneWay}" />
+                    <TextBlock Text="{Binding ProgressText}" VerticalAlignment="Center" Margin="6,0" TextTrimming="CharacterEllipsis" />
+                </DockPanel>
+            </StackPanel>
+        </GroupBox>
+
+        <!-- 요약 -->
+        <UniformGrid DockPanel.Dock="Top" Rows="1" Margin="0,8,0,8" Visibility="{Binding HasResult, Converter={StaticResource BoolToVis}}">
+            <Border Style="{StaticResource Card}">
+                <StackPanel><TextBlock Text="수익률" Style="{StaticResource Caption}" />
+                    <TextBlock Text="{Binding ReturnPct, StringFormat={}{0:+0.00;-0.00;0.00}%}" FontSize="22" FontWeight="Bold" /></StackPanel>
+            </Border>
+            <Border Style="{StaticResource Card}">
+                <StackPanel><TextBlock Text="수익금 (순)" Style="{StaticResource Caption}" />
+                    <TextBlock Text="{Binding NetProfit, StringFormat={}{0:+#,0;-#,0;0}원}" FontSize="22" FontWeight="Bold" /></StackPanel>
+            </Border>
+            <Border Style="{StaticResource Card}">
+                <StackPanel><TextBlock Text="최종 평가금액" Style="{StaticResource Caption}" />
+                    <TextBlock Text="{Binding EndingEquity, StringFormat={}{0:N0}원}" FontSize="18" FontWeight="SemiBold" /></StackPanel>
+            </Border>
+            <Border Style="{StaticResource Card}">
+                <StackPanel><TextBlock Text="최대 낙폭 (MDD)" Style="{StaticResource Caption}" />
+                    <TextBlock Text="{Binding MaxDrawdownPct, StringFormat=-{0:0.00}%}" FontSize="18" FontWeight="SemiBold" /></StackPanel>
+            </Border>
+            <Border Style="{StaticResource Card}">
+                <StackPanel><TextBlock Text="승률" Style="{StaticResource Caption}" />
+                    <TextBlock Text="{Binding WinRateText}" FontSize="16" FontWeight="SemiBold" /></StackPanel>
+            </Border>
+            <Border Style="{StaticResource Card}">
+                <StackPanel><TextBlock Text="거래" Style="{StaticResource Caption}" />
+                    <TextBlock Text="{Binding TradeCountText}" FontSize="16" FontWeight="SemiBold" /></StackPanel>
+            </Border>
+        </UniformGrid>
+
+        <dx:DXTabControl>
+            <dx:DXTabItem Header="일별 손익">
+                <Grid>
+                    <Grid.RowDefinitions><RowDefinition Height="230" /><RowDefinition Height="*" /></Grid.RowDefinitions>
+                    <dxc:ChartControl Grid.Row="0" AnimationMode="Disabled" CrosshairEnabled="True" BorderThickness="0">
+                        <dxc:XYDiagram2D>
+                            <dxc:XYDiagram2D.AxisX>
+                                <dxc:AxisX2D><dxc:AxisX2D.DateTimeScaleOptions><dxc:ManualDateTimeScaleOptions MeasureUnit="Day" GridAlignment="Day" AutoGrid="True" SkipRangesWithoutPoints="True" /></dxc:AxisX2D.DateTimeScaleOptions></dxc:AxisX2D>
+                            </dxc:XYDiagram2D.AxisX>
+                            <dxc:XYDiagram2D.AxisY>
+                                <dxc:AxisY2D><dxc:AxisY2D.WholeRange><dxc:Range dxc:AxisY2D.AlwaysShowZeroLevel="False" /></dxc:AxisY2D.WholeRange></dxc:AxisY2D>
+                            </dxc:XYDiagram2D.AxisY>
+                            <dxc:LineSeries2D DisplayName="평가금액" DataSource="{Binding Days}" ArgumentDataMember="Date" ValueDataMember="EquityEnd"
+                                              ArgumentScaleType="DateTime" MarkerVisible="True" />
+                        </dxc:XYDiagram2D>
+                    </dxc:ChartControl>
+                    <dxg:GridControl Grid.Row="1" ItemsSource="{Binding Days}" AutoGenerateColumns="None" Margin="0,6,0,0">
+                        <dxg:GridControl.Columns>
+                            <dxg:GridColumn FieldName="Date" Header="날짜" Width="90">
+                                <dxg:GridColumn.EditSettings><dxe:DateEditSettings DisplayFormat="yyyy-MM-dd (ddd)" /></dxg:GridColumn.EditSettings>
+                            </dxg:GridColumn>
+                            <dxg:GridColumn FieldName="Symbols" Header="재생 종목" Width="60" />
+                            <dxg:GridColumn FieldName="Trades" Header="거래" Width="50" />
+                            <dxg:GridColumn FieldName="Wins" Header="승" Width="40" />
+                            <dxg:GridColumn FieldName="RealizedNet" Header="실현손익" Width="90">
+                                <dxg:GridColumn.EditSettings><dxe:TextEditSettings DisplayFormat="+#,0;-#,0;0" HorizontalContentAlignment="Right" /></dxg:GridColumn.EditSettings>
+                            </dxg:GridColumn>
+                            <dxg:GridColumn FieldName="EquityEnd" Header="평가금액" Width="100">
+                                <dxg:GridColumn.EditSettings><dxe:TextEditSettings DisplayFormat="N0" HorizontalContentAlignment="Right" /></dxg:GridColumn.EditSettings>
+                            </dxg:GridColumn>
+                            <dxg:GridColumn FieldName="DayReturnPct" Header="일 수익률%" Width="75">
+                                <dxg:GridColumn.EditSettings><dxe:TextEditSettings DisplayFormat="+0.00;-0.00;0.00" HorizontalContentAlignment="Right" /></dxg:GridColumn.EditSettings>
+                            </dxg:GridColumn>
+                            <dxg:GridColumn FieldName="CumulativeReturnPct" Header="누적%" Width="70">
+                                <dxg:GridColumn.EditSettings><dxe:TextEditSettings DisplayFormat="+0.00;-0.00;0.00" HorizontalContentAlignment="Right" /></dxg:GridColumn.EditSettings>
+                            </dxg:GridColumn>
+                            <dxg:GridColumn FieldName="OpenPositions" Header="익일 보유" Width="60" />
+                            <dxg:GridColumn FieldName="Note" Header="비고" Width="200" />
+                        </dxg:GridControl.Columns>
+                        <dxg:GridControl.View>
+                            <dxg:TableView AllowEditing="False" ShowGroupPanel="False" NavigationStyle="Row">
+                                <dxg:TableView.FormatConditions>
+                                    <dxg:FormatCondition FieldName="DayReturnPct" Expression="[DayReturnPct] &gt; 0"><dx:Format Foreground="#FFF04452" /></dxg:FormatCondition>
+                                    <dxg:FormatCondition FieldName="DayReturnPct" Expression="[DayReturnPct] &lt; 0"><dx:Format Foreground="#FF3B82F6" /></dxg:FormatCondition>
+                                    <dxg:FormatCondition FieldName="RealizedNet" Expression="[RealizedNet] &gt; 0"><dx:Format Foreground="#FFF04452" /></dxg:FormatCondition>
+                                    <dxg:FormatCondition FieldName="RealizedNet" Expression="[RealizedNet] &lt; 0"><dx:Format Foreground="#FF3B82F6" /></dxg:FormatCondition>
+                                </dxg:TableView.FormatConditions>
+                            </dxg:TableView>
+                        </dxg:GridControl.View>
+                    </dxg:GridControl>
+                </Grid>
+            </dx:DXTabItem>
+            <dx:DXTabItem Header="거래 내역">
+                <dxg:GridControl ItemsSource="{Binding Trades}" AutoGenerateColumns="None">
+                    <dxg:GridControl.Columns>
+                        <dxg:GridColumn FieldName="EntryTime" Header="매수" Width="110">
+                            <dxg:GridColumn.EditSettings><dxe:DateEditSettings DisplayFormat="MM-dd HH:mm" /></dxg:GridColumn.EditSettings>
+                        </dxg:GridColumn>
+                        <dxg:GridColumn FieldName="ExitTime" Header="매도" Width="110">
+                            <dxg:GridColumn.EditSettings><dxe:DateEditSettings DisplayFormat="MM-dd HH:mm" /></dxg:GridColumn.EditSettings>
+                        </dxg:GridColumn>
+                        <dxg:GridColumn FieldName="Name" Header="종목" Width="140" />
+                        <dxg:GridColumn FieldName="Strategy" Header="전략" Width="70" />
+                        <dxg:GridColumn FieldName="Quantity" Header="수량" Width="55">
+                            <dxg:GridColumn.EditSettings><dxe:TextEditSettings DisplayFormat="N0" HorizontalContentAlignment="Right" /></dxg:GridColumn.EditSettings>
+                        </dxg:GridColumn>
+                        <dxg:GridColumn FieldName="AverageEntry" Header="매수가" Width="80">
+                            <dxg:GridColumn.EditSettings><dxe:TextEditSettings DisplayFormat="N0" HorizontalContentAlignment="Right" /></dxg:GridColumn.EditSettings>
+                        </dxg:GridColumn>
+                        <dxg:GridColumn FieldName="AverageExit" Header="매도가" Width="80">
+                            <dxg:GridColumn.EditSettings><dxe:TextEditSettings DisplayFormat="N0" HorizontalContentAlignment="Right" /></dxg:GridColumn.EditSettings>
+                        </dxg:GridColumn>
+                        <dxg:GridColumn FieldName="NetPnl" Header="순손익" Width="85">
+                            <dxg:GridColumn.EditSettings><dxe:TextEditSettings DisplayFormat="+#,0;-#,0;0" HorizontalContentAlignment="Right" /></dxg:GridColumn.EditSettings>
+                        </dxg:GridColumn>
+                        <dxg:GridColumn FieldName="NetPct" Header="수익률%" Width="65">
+                            <dxg:GridColumn.EditSettings><dxe:TextEditSettings DisplayFormat="+0.00;-0.00;0.00" HorizontalContentAlignment="Right" /></dxg:GridColumn.EditSettings>
+                        </dxg:GridColumn>
+                        <dxg:GridColumn FieldName="ExitReason" Header="청산 사유" Width="150" />
+                        <dxg:GridColumn FieldName="EntryReason" Header="진입 근거" Width="260" />
+                    </dxg:GridControl.Columns>
+                    <dxg:GridControl.TotalSummary>
+                        <dxg:GridSummaryItem FieldName="NetPnl" SummaryType="Sum" DisplayFormat="합계 {0:+#,0;-#,0;0}" />
+                        <dxg:GridSummaryItem FieldName="NetPct" SummaryType="Average" DisplayFormat="평균 {0:+0.00;-0.00}" />
+                        <dxg:GridSummaryItem FieldName="Name" SummaryType="Count" DisplayFormat="{}{0}건" />
+                    </dxg:GridControl.TotalSummary>
+                    <dxg:GridControl.View>
+                        <dxg:TableView AllowEditing="False" ShowGroupPanel="True" ShowTotalSummary="True" NavigationStyle="Row">
+                            <dxg:TableView.FormatConditions>
+                                <dxg:FormatCondition FieldName="NetPnl" Expression="[NetPnl] &gt; 0"><dx:Format Foreground="#FFF04452" /></dxg:FormatCondition>
+                                <dxg:FormatCondition FieldName="NetPnl" Expression="[NetPnl] &lt; 0"><dx:Format Foreground="#FF3B82F6" /></dxg:FormatCondition>
+                            </dxg:TableView.FormatConditions>
+                        </dxg:TableView>
+                    </dxg:GridControl.View>
+                </dxg:GridControl>
+            </dx:DXTabItem>
+            <dx:DXTabItem Header="리포트">
+                <TextBox Text="{Binding ReportText, Mode=OneWay}" IsReadOnly="True" FontFamily="D2Coding, Consolas, Malgun Gothic" FontSize="12.5"
+                         VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" TextWrapping="NoWrap" />
+            </dx:DXTabItem>
+        </dx:DXTabControl>
+    </DockPanel>
+</dx:ThemedWindow>

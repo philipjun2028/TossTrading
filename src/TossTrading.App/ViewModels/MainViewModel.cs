@@ -45,6 +45,7 @@ public sealed class MainViewModel : ViewModelBase
         ResetKillSwitchCommand = new AsyncCommand(() => Engine is null ? Task.CompletedTask : Run(() => Engine.ResetKillSwitchAsync()));
         OpenSettingsCommand = new AsyncCommand(OpenSettingsAsync);
         OpenAnalysisCommand = new DelegateCommand(OpenAnalysis);
+        OpenBacktestCommand = new DelegateCommand(OpenBacktest);
         SaveAsPresetCommand = new DelegateCommand(SaveAsPreset);
 
         _timer = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromMilliseconds(300) };
@@ -185,6 +186,7 @@ public sealed class MainViewModel : ViewModelBase
     // ---------------------------------------------------------------- 명령
     public AsyncCommand StartCommand { get; }
     public DelegateCommand OpenAnalysisCommand { get; }
+    public DelegateCommand OpenBacktestCommand { get; }
     public AsyncCommand StopCommand { get; }
     public AsyncCommand AddSelectedCandidateCommand { get; }
     public AsyncCommand AddManualSymbolCommand { get; }
@@ -336,6 +338,15 @@ public sealed class MainViewModel : ViewModelBase
         var existing = Application.Current.Windows.OfType<AnalysisWindow>().FirstOrDefault();
         if (existing is not null) { existing.Activate(); return; }
         new AnalysisWindow(new AnalysisViewModel()) { Owner = Application.Current.MainWindow }.Show();
+    }
+
+    /// <summary>백테스트 창 (모달 아님). 현재 설정의 복사본으로 실행한다.</summary>
+    private void OpenBacktest()
+    {
+        var existing = Application.Current.Windows.OfType<BacktestWindow>().FirstOrDefault();
+        if (existing is not null) { existing.Activate(); return; }
+        var vm = new BacktestViewModel(SettingsStore.Clone(Settings), () => IsRunning && DataSource == DataSourceKind.Toss);
+        new BacktestWindow(vm) { Owner = Application.Current.MainWindow }.Show();
     }
 
     private async Task OpenSettingsAsync()

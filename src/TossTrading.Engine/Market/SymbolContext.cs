@@ -90,6 +90,22 @@ public sealed class SymbolContext
 
     public void OnOrderBook(OrderBookSnapshot book) => OrderBook = book;
 
+    /// <summary>
+    /// 새 거래일 시작: 당일 통계(분봉·VWAP·고저·체결강도)를 비우고 마지막 체결가를 전일 종가로 삼는다.
+    /// 엔진을 밤새 켜 둔 경우(종가매매 익일 보유)에 어제 값이 오늘 판단에 섞이지 않도록.
+    /// </summary>
+    public void ResetSession()
+    {
+        if (_lastPrice > 0) PreviousClose = _lastPrice;
+        _bars.Clear();
+        CurrentBar = null;
+        DayOpen = DayHigh = DayLow = 0;
+        CumVolume = CumValue = 0;
+        BuyVolume = SellVolume = 0;
+        Limits = null;
+        OrderBook = null;
+    }
+
     /// <summary>체결이 없어도 분이 넘어가면 봉을 마감한다. 마감되면 true.</summary>
     public bool OnTimer(DateTimeOffset now)
     {

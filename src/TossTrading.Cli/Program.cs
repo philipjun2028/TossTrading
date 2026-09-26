@@ -10,6 +10,8 @@ Console.OutputEncoding = Encoding.UTF8;
 // --data <폴더> / --source sim|toss 옵션은 위치 인수와 분리해서 읽는다
 var dataDir = OptionValue(ref args, "--data");
 var sourceOpt = OptionValue(ref args, "--source");
+var symbolsOpt = OptionValue(ref args, "--symbols");
+var cashOpt = OptionValue(ref args, "--cash");
 var cmd = args.FirstOrDefault()?.ToLowerInvariant();
 
 return cmd switch
@@ -18,6 +20,7 @@ return cmd switch
     "sim" => await SimAsync(args.Length > 1 ? int.Parse(args[1]) : 60, args.Length > 2 ? double.Parse(args[2]) : 60,
                             closing: args.Length > 3 && args[3].Equals("closing", StringComparison.OrdinalIgnoreCase), dataDir,
                             auto: args.Length > 3 && args[3].Equals("auto", StringComparison.OrdinalIgnoreCase)),
+    "backtest" => await BacktestAsync(args, dataDir, sourceOpt, symbolsOpt, cashOpt),
     "report" => Report(args.Length > 1 ? int.Parse(args[1]) : 30, dataDir, sourceOpt),
     _ => Usage(),
 };
@@ -43,6 +46,11 @@ static int Usage()
                              closing: 14:40 부터 시작해 종가베팅 봇으로 실행
                              auto: 자동 운용 (단타 자동 선정 → 14:50 정리 → 종가베팅 자동 선정)
                              --data <폴더> 를 주면 로그·분석 기록(journal)을 그 폴더에 저장
+          backtest <시작일> <종료일>
+                             과거 데이터로 자동 운용(단타→종가매매)을 재생해 거래내역·수익률·수익금 리포트
+                             예) backtest 2026-08-01 2026-08-31 --source toss --cash 10000000
+                             --source toss (TOSS_CLIENT_ID/SECRET 필요) | synthetic (가상 데이터, 기본)
+                             --symbols 005930,000660 (순위 종목 외 추가), 결과: <데이터폴더>\backtests\<실행시각>\
           report [일수]      최근 N일(기본 30) 분석 기록으로 성과 리포트 + 개선 제안 생성
                              --data <폴더> (기본: %LocalAppData%\TossTrading), --source sim|toss
                              결과: <폴더>\reports\report_*.md, trades_*.csv, signals_*.csv
@@ -142,6 +150,57 @@ static int Report(int days, string? dataDir, string? source)
     Console.WriteLine($"저장: {outDir}");
     if (ds.BadLines > 0) Console.WriteLine($"(읽지 못한 줄 {ds.BadLines}개)");
     return 0;
+}
+
+static async Task<int> BacktestAsync(string[] args, string? dataDir, string? source, string? symbols, string? cash)
+{
+    if (args.Length < 3 || !DateOnly.TryParse(args[1], out var from) || !DateOnly.TryParse(args[2], out var to))
+    {
+        Console.WriteLine("사용법: backtest <시작일 yyyy-MM-dd> <종료일 yyyy-MM-dd> [--source toss|synthetic] [--symbols A,B] [--cash N]");
+        return 1;
+    }
+    dataDir ??= Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "TossTrading");
+    var options = new TossTrading.Engine.Backtest.BacktestOptions
+    {
+        From = from, To = to,
+        StartingCash = cash is null ? 10_000_000m : decimal.Parse(cash),
+        ExtraSymbols = symbols?.Split(',', StringSplitOptions.RemoveEmptyEntries).ToList() ?? new(),
+        OutputDirectory = Path.Combine(dataDir, "backtests", $"{Kst.Now:yyyyMMdd_HHmmss}"),
+    };
+
+    TossConnection? conn = null;
+    IHistoryProvider provider;
+    if (source?.ToLowerInvariant() == "toss")
+    {
+        var id = Environment.GetEnvironmentVariable("TOSS_CLIENT_ID");
+        var secret = Environment.GetEnvironmentVariable("TOSS_CLIENT_SECRET");
+        if (string.IsNullOrEmpty(id) || string.IsNullOrEmpty(secret)) { Console.WriteLine("TOSS_CLIENT_ID / TOSS_CLIENT_SECRET 환경변수를 설정하세요."); return 1; }
+        conn = new TossConnection(new TossOptions { ClientId = id, ClientSecret = secret });
+        provider = new TossTrading.Engine.Backtest.CachedHistoryProvider(new TossHistoryProvider(conn.Source), Path.Combine(dataDir, "history"));
+    }
+    else
+    {
+        provider = new TossTrading.Engine.Backtest.SyntheticHistoryProvider();
+    }
+
+    var lastStage = "";
+    var progress = new Progress<TossTrading.Engine.Backtest.BacktestProgress>(p =>
+    {
+        if (p.Stage == "재생" || p.Stage != lastStage) Console.WriteLine($"[{p.Stage}] {p.Message}");
+        lastStage = p.Stage;
+    });
+    try
+    {
+        var result = await new TossTrading.Engine.Backtest.BacktestRunner(provider, options, progress).RunAsync();
+        Console.WriteLine();
+        Console.WriteLine(TossTrading.Engine.Backtest.BacktestReport.Markdown(result));
+        Console.WriteLine($"저장: {TossTrading.Engine.Backtest.BacktestReport.Save(result)}");
+        return 0;
+    }
+    finally
+    {
+        if (conn is not null) await conn.DisposeAsync();
+    }
 }
 
 static async Task<int> SimAsync(int seconds, double speed, bool closing, string? dataDir, bool auto = false)

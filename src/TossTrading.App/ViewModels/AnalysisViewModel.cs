@@ -129,7 +129,12 @@ public sealed class AnalysisTradeRow
         ExitTime = Kst.ToKst(t.ExitTime).DateTime;
         Name = $"{t.Name}({t.Symbol})";
         Strategy = t.Strategy;
-        Source = t.DataSource == DataSourceKind.Toss ? (t.Execution == ExecutionMode.Live ? "실전" : "토스·모의") : "시뮬";
+        Source = t.DataSource switch
+        {
+            DataSourceKind.Toss => t.Execution == ExecutionMode.Live ? "실전" : "토스·모의",
+            DataSourceKind.Backtest => "백테스트",
+            _ => "시뮬",
+        };
         EntryPrice = t.AverageEntry;
         ExitPrice = t.AverageExit;
         Quantity = t.Quantity;

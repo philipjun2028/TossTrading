@@ -117,6 +117,43 @@ public sealed class TossMarketDataSource : IMarketDataSource
             .OrderBy(b => b.Start).TakeLast(count).ToList();
     }
 
+    /// <summary>
+    /// 특정 거래일의 1분봉 (백테스트). before = 다음날 0시부터 과거로 페이지를 넘기며 그날 봉만 모은다.
+    /// (NXT 시간외 봉이 섞여 있을 수 있어 최대 6페이지까지 본다. 정규장 필터는 재생기가 한다)
+    /// </summary>
+    public async Task<IReadOnlyList<Bar>> GetMinuteBarsForDateAsync(string symbol, DateOnly date, CancellationToken ct)
+    {
+        var bars = new List<Bar>();
+        DateTimeOffset? before = Kst.At(date.AddDays(1), TimeOnly.MinValue);
+        for (var page = 0; page < 6 && before is not null; page++)
+        {
+            var p = await _rest.GetCandlesAsync(symbol, "1m", 200, before, ct).ConfigureAwait(false);
+            if (p.Candles.Count == 0) break;
+            bars.AddRange(p.Candles.Where(c => Kst.DateOf(c.Timestamp) == date).Select(TossMapper.ToBar));
+            var oldest = p.Candles.Min(c => c.Timestamp);
+            if (Kst.DateOf(oldest) < date) break;        // 그날 09:00 이전까지 다 받음
+            if (p.NextBefore is null || p.NextBefore >= before) break; // 더 과거가 없음 / 서버가 before 를 무시
+            before = p.NextBefore;
+        }
+        return bars.GroupBy(b => b.Start).Select(g => g.First()).OrderBy(b => b.Start).ToList();
+    }
+
+    /// <summary>to 일자까지(포함) 일봉 최근 count 개 (백테스트)</summary>
+    public async Task<IReadOnlyList<Bar>> GetDailyBarsUntilAsync(string symbol, DateOnly to, int count, CancellationToken ct)
+    {
+        var bars = new List<Bar>();
+        DateTimeOffset? before = Kst.At(to.AddDays(1), TimeOnly.MinValue);
+        for (var page = 0; page < 5 && bars.Count < count && before is not null; page++)
+        {
+            var p = await _rest.GetCandlesAsync(symbol, "1d", 200, before, ct).ConfigureAwait(false);
+            if (p.Candles.Count == 0) break;
+            bars.AddRange(p.Candles.Where(c => Kst.DateOf(c.Timestamp) <= to).Select(TossMapper.ToBar));
+            if (p.NextBefore is null || p.NextBefore >= before) break;
+            before = p.NextBefore;
+        }
+        return bars.GroupBy(b => Kst.DateOf(b.Start)).Select(g => g.First()).OrderBy(b => b.Start).TakeLast(count).ToList();
+    }
+
     public async Task<IReadOnlyList<StockInfo>> GetStocksAsync(IReadOnlyList<string> symbols, CancellationToken ct)
     {
         var result = new List<StockInfo>();
@@ -339,4 +376,32 @@ public sealed class TossConnection : IAsyncDisposable
         await Stream.DisposeAsync().ConfigureAwait(false);
         Rest.Dispose();
     }
+}
+
+/// <summary>
+/// 토스 과거 데이터 (백테스트). 과거 순위는 조회할 수 없어 현재 거래대금·거래량·상승률 상위 종목을 대상 풀로 쓴다.
+/// 호출 한도는 TossRestClient 의 시세 그룹 제한을 따른다. CachedHistoryProvider 로 감싸서 쓰는 것을 권장.
+/// </summary>
+public sealed class TossHistoryProvider : IHistoryProvider
+{
+    private readonly TossMarketDataSource _source;
+
+    public TossHistoryProvider(TossMarketDataSource source) => _source = source;
+
+    public string Name => "토스 과거 데이터";
+
+    public async Task<IReadOnlyList<StockInfo>> GetUniverseAsync(CancellationToken ct)
+    {
+        var symbols = new HashSet<string>();
+        foreach (var type in new[] { RankingType.TradingAmount, RankingType.TradingVolume, RankingType.TopGainers })
+            foreach (var e in await _source.GetRankingsAsync(type, 100, ct).ConfigureAwait(false))
+                symbols.Add(e.Symbol);
+        return symbols.Count == 0 ? Array.Empty<StockInfo>() : await _source.GetStocksAsync(symbols.ToList(), ct).ConfigureAwait(false);
+    }
+
+    public Task<IReadOnlyList<Bar>> GetDailyBarsAsync(string symbol, DateOnly to, int count, CancellationToken ct) =>
+        _source.GetDailyBarsUntilAsync(symbol, to, count, ct);
+
+    public Task<IReadOnlyList<Bar>> GetMinuteBarsAsync(string symbol, DateOnly date, CancellationToken ct) =>
+        _source.GetMinuteBarsForDateAsync(symbol, date, ct);
 }

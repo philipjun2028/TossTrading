@@ -138,7 +138,8 @@ public sealed class PerformanceReport
         var trades = _ds.Trades.OrderBy(t => t.ExitTime).ToList();
         sb.AppendLine($"# 매매 성과 분석 ({_filter.From:yyyy-MM-dd} ~ {_filter.To:yyyy-MM-dd})");
         var scope = new List<string>();
-        if (_filter.DataSource is { } src) scope.Add(src == DataSourceKind.Toss ? "토스 실시간" : "시뮬레이션");
+        if (_filter.DataSource is { } src)
+            scope.Add(src switch { DataSourceKind.Toss => "토스 실시간", DataSourceKind.Backtest => "백테스트", _ => "시뮬레이션" });
         if (_filter.Execution is { } ex) scope.Add(ex == ExecutionMode.Live ? "실전" : "모의");
         if (_filter.Strategy is { } st) scope.Add(st);
         sb.AppendLine($"대상: {(scope.Count > 0 ? string.Join(", ", scope) : "전체")} · 거래 {trades.Count}건 · 신호 {_ds.Signals.Count}건");

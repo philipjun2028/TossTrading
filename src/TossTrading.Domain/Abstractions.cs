@@ -38,6 +38,23 @@ public interface IMarketDataFeed : IAsyncDisposable
     Task SetSubscriptionsAsync(IReadOnlyCollection<string> tradeSymbols, IReadOnlyCollection<string> orderBookSymbols, CancellationToken ct);
 }
 
+/// <summary>
+/// 백테스트용 과거 데이터 (토스 과거 봉 / 가상 데이터). 봉은 모두 오래된 것부터.
+/// </summary>
+public interface IHistoryProvider
+{
+    string Name { get; }
+
+    /// <summary>백테스트 대상 종목 목록 (과거 순위는 조회할 수 없으므로 후보가 될 수 있는 종목 풀)</summary>
+    Task<IReadOnlyList<StockInfo>> GetUniverseAsync(CancellationToken ct);
+
+    /// <summary>to 일자까지(포함)의 일봉 최근 count 개</summary>
+    Task<IReadOnlyList<Bar>> GetDailyBarsAsync(string symbol, DateOnly to, int count, CancellationToken ct);
+
+    /// <summary>해당 거래일의 1분봉 (없으면 빈 목록)</summary>
+    Task<IReadOnlyList<Bar>> GetMinuteBarsAsync(string symbol, DateOnly date, CancellationToken ct);
+}
+
 /// <summary>REST 성격의 조회 (랭킹, 현재가, 분봉/일봉, 종목정보)</summary>
 public interface IMarketDataSource
 {

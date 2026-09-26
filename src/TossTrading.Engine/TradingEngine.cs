@@ -251,6 +251,38 @@ public sealed class TradingEngine : IBotHost, IAsyncDisposable
     /// <summary>테스트용: 대기 중인 이벤트를 모두 처리할 때까지 기다린다.</summary>
     public Task FlushAsync() => Invoke(() => true);
 
+    private int _pendingAsync;
+
+    /// <summary>
+    /// 백테스트용: 이벤트 큐·주문 처리·비동기 조회가 모두 끝날 때까지 기다린다.
+    /// (가상 시계를 한 단계 진행할 때마다 호출 → 실시간과 같은 순서로 결정이 이뤄진다)
+    /// </summary>
+    public async Task SettleAsync(CancellationToken ct = default)
+    {
+        var idleRounds = 0;
+        for (var spin = 0; ; spin++)
+        {
+            await FlushAsync().ConfigureAwait(false);
+            if (_orders.IsIdle && Volatile.Read(ref _pendingAsync) == 0)
+            {
+                if (++idleRounds >= 2) return; // 방금 처리한 이벤트가 새 작업을 만들었는지 한 번 더 확인
+                continue;
+            }
+            idleRounds = 0;
+            ct.ThrowIfCancellationRequested();
+            if (spin < 50) await Task.Yield();
+            else await Task.Delay(1, ct).ConfigureAwait(false);
+            if (spin > 20_000) throw new TimeoutException("엔진이 한 단계 처리를 끝내지 못했습니다.");
+        }
+    }
+
+    /// <summary>백테스트용: 스캐너를 지금 한 번 실행하고 결과를 반영한다 (RunScanner=false 일 때).</summary>
+    public async Task ScanNowAsync(CancellationToken ct = default)
+    {
+        var list = await _scanner.ScanOnceAsync(ct).ConfigureAwait(false);
+        await Invoke(() => { HandleCandidates(list); return true; }).ConfigureAwait(false);
+    }
+
     /// <summary>테스트용: 타이머 한 번을 즉시 실행한다.</summary>
     public Task TickAsync() => Invoke(() => { OnTimer(); return true; });
 
@@ -543,6 +575,13 @@ public sealed class TradingEngine : IBotHost, IAsyncDisposable
             _tradingDate = today;
             _risk.ResetDaily(_options.CapitalOverride > 0 ? _options.CapitalOverride : _account.Equity);
             _log.Write(LogLevel.Info, "엔진", $"새 거래일 {today:yyyy-MM-dd}: 일일 손익·한도 초기화");
+
+            // 종목별 당일 통계(VWAP·고저·분봉)도 새로 시작하고, 상하한가·전일종가를 다시 채운다
+            foreach (var ctx in _contexts.Values) ctx.ResetSession();
+            _seeded.Clear();
+            _liveMetrics.Clear();
+            _candidates = Array.Empty<ScanCandidate>();
+            RecomputeSubscriptions();
         }
 
         if (_store is not null && (now - _lastSave).TotalSeconds >= 2)
@@ -591,6 +630,13 @@ public sealed class TradingEngine : IBotHost, IAsyncDisposable
     }
 
     private async Task RefreshAccountAsync()
+    {
+        Interlocked.Increment(ref _pendingAsync);
+        try { await RefreshAccountCoreAsync().ConfigureAwait(false); }
+        finally { Interlocked.Decrement(ref _pendingAsync); }
+    }
+
+    private async Task RefreshAccountCoreAsync()
     {
         try
         {
@@ -663,6 +709,13 @@ public sealed class TradingEngine : IBotHost, IAsyncDisposable
     /// <summary>늦게 시작한 종목의 당일 분봉 복원 (+ 봇 종목은 상하한가·호가·전일종가·종목명)</summary>
     private async Task SeedAsync(string symbol, bool includeBars, bool full)
     {
+        Interlocked.Increment(ref _pendingAsync);
+        try { await SeedCoreAsync(symbol, includeBars, full).ConfigureAwait(false); }
+        finally { Interlocked.Decrement(ref _pendingAsync); }
+    }
+
+    private async Task SeedCoreAsync(string symbol, bool includeBars, bool full)
+    {
         var ct = _cts?.Token ?? default;
         try
         {
@@ -732,10 +785,12 @@ public sealed class TradingEngine : IBotHost, IAsyncDisposable
         if (trades.SetEquals(_subs.Trades) && books.SetEquals(_subs.Books)) return;
         _subs = (trades, books);
         var ct = _cts?.Token ?? default;
+        Interlocked.Increment(ref _pendingAsync);
         _ = Task.Run(async () =>
         {
             try { await _feed.SetSubscriptionsAsync(trades, books, ct).ConfigureAwait(false); }
             catch (Exception ex) when (ex is not OperationCanceledException) { _log.Write(LogLevel.Warn, "시세", $"구독 변경 실패: {ex.Message}"); }
+            finally { Interlocked.Decrement(ref _pendingAsync); }
         }, ct);
     }
 
