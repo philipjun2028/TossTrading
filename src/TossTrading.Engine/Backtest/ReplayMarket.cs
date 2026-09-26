@@ -78,18 +78,34 @@ public sealed class ReplayMarket : IMarketDataFeed, IMarketDataSource, IClock
         Date = date;
     }
 
-    /// <summary>minute 분의 phase 번째 체결을 발생시킨다 (0~3). 시계는 호출자가 먼저 옮겨 둔다.</summary>
-    public void EmitPhase(DateTimeOffset minute, int phase)
+    /// <summary>minute 분의 phase 번째 체결을 한 번에 발생시킨다 (구간 사이 가격 없음). 시계는 호출자가 먼저 옮겨 둔다.</summary>
+    public void EmitPhase(DateTimeOffset minute, int phase) => EmitStep(minute, phase, 1, 1);
+
+    /// <summary>
+    /// phase 구간(직전 꼭짓점 → 이번 꼭짓점)을 subCount 개 체결로 나눈 것 중 sub 번째 (1부터).
+    /// 실제 시장은 가격이 연속으로 움직이므로 중간 가격을 채워 넣어야
+    /// 돌파 진입이 봉 고가가 아니라 돌파 지점에서, 손절이 봉 저가가 아니라 손절가 근처에서 체결된다.
+    /// </summary>
+    public void EmitStep(DateTimeOffset minute, int phase, int sub, int subCount)
     {
+        subCount = phase == 0 ? 1 : Math.Max(1, subCount);
+        sub = Math.Clamp(sub, 1, subCount);
         foreach (var (sym, st) in _day)
         {
             if (!st.Bars.TryGetValue(minute, out var bar)) continue;
-            var price = PathPrice(bar, phase);
-            var vol = phase < PhasesPerMinute - 1
+            var target = PathPrice(bar, phase);
+            var from = phase == 0 ? target : PathPrice(bar, phase - 1);
+            var price = sub == subCount ? target : InterpolateToTick(from, target, (decimal)sub / subCount);
+
+            // 구간 거래량을 누적 비율로 나눠 합계가 정확히 맞게
+            var phaseVol = phase < PhasesPerMinute - 1
                 ? Math.Floor(bar.Volume / PhasesPerMinute)
                 : bar.Volume - Math.Floor(bar.Volume / PhasesPerMinute) * (PhasesPerMinute - 1);
+            var vol = Math.Floor(phaseVol * sub / subCount) - Math.Floor(phaseVol * (sub - 1) / subCount);
             if (vol <= 0) continue;
-            var up = phase == 0 ? bar.Close >= bar.Open : price >= PathPrice(bar, phase - 1);
+
+            var prev = st.LastPrice;
+            var up = phase == 0 ? bar.Close >= bar.Open : price >= (prev > 0 ? prev : from);
             var tick = TickRules.TickSize(price);
             var (bid, ask) = up ? (price - tick, price) : (price, price + tick);
             var depth = Math.Max(1m, vol);
@@ -109,6 +125,13 @@ public sealed class ReplayMarket : IMarketDataFeed, IMarketDataSource, IClock
         }
     }
 
+    /// <summary>from→to 사이 비율 위치를 호가 단위로 (출발점 쪽으로) 맞춘다</summary>
+    public static decimal InterpolateToTick(decimal from, decimal to, decimal fraction)
+    {
+        var raw = from + (to - from) * fraction;
+        return to >= from ? TickRules.RoundDown(raw) : TickRules.RoundUp(raw);
+    }
+
     public static decimal PathPrice(Bar b, int phase)
     {
         var bullish = b.Close >= b.Open;
@@ -120,6 +143,10 @@ public sealed class ReplayMarket : IMarketDataFeed, IMarketDataSource, IClock
             _ => b.Close,
         };
     }
+
+    /// <summary>오늘 재생 중인 종목의 1분봉 전체 (진단 기록용)</summary>
+    public IReadOnlyList<Bar> DayBarsOf(string symbol) =>
+        _day.TryGetValue(symbol, out var st) ? st.Bars.Values.OrderBy(b => b.Start).ToList() : Array.Empty<Bar>();
 
     /// <summary>현재 보유 평가용 종가 (당일 마지막 체결가)</summary>
     public decimal? LastPriceOf(string symbol) => _day.TryGetValue(symbol, out var st) && st.LastPrice > 0 ? st.LastPrice : null;

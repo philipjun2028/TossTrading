@@ -270,9 +270,10 @@ public sealed class TradingEngine : IBotHost, IAsyncDisposable
             }
             idleRounds = 0;
             ct.ThrowIfCancellationRequested();
-            if (spin < 50) await Task.Yield();
+            // 대기 작업은 대부분 수 마이크로초 안에 끝난다. Task.Delay(1) 은 Windows 에서 약 15ms 라서 오래 양보만 한다
+            if (spin < 20_000) await Task.Yield();
             else await Task.Delay(1, ct).ConfigureAwait(false);
-            if (spin > 20_000) throw new TimeoutException("엔진이 한 단계 처리를 끝내지 못했습니다.");
+            if (spin > 40_000) throw new TimeoutException("엔진이 한 단계 처리를 끝내지 못했습니다.");
         }
     }
 

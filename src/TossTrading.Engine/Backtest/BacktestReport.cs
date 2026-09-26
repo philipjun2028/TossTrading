@@ -122,8 +122,11 @@ public static class BacktestReport
         return sb.ToString();
     }
 
-    /// <summary>OutputDirectory 에 report.md / trades.csv / daily.csv (+ 분석 리포트 analysis.md) 저장. 저장한 폴더를 돌려준다.</summary>
-    public static string? Save(BacktestResult r)
+    /// <summary>
+    /// OutputDirectory 에 report.md / trades.csv / daily.csv / options.json
+    /// (+ 분석 리포트 analysis.md, 거래 상세 trades_detail.csv, 신호 signals.csv) 저장. 저장한 폴더를 돌려준다.
+    /// </summary>
+    public static string? Save(BacktestResult r, BacktestOptions? options = null)
     {
         if (r.OutputDirectory is null) return null;
         Directory.CreateDirectory(r.OutputDirectory);
@@ -139,8 +142,50 @@ public static class BacktestReport
             var filter = new ReportFilter(r.From, r.To.AddDays(7));
             var ds = AnalysisDataSet.Load(journal, filter);
             File.WriteAllText(Path.Combine(r.OutputDirectory, "analysis.md"), new PerformanceReport(ds, filter).BuildMarkdown(), bom);
+            File.WriteAllText(Path.Combine(r.OutputDirectory, "trades_detail.csv"), PerformanceReport.TradesCsv(ds.Trades), bom);
+            File.WriteAllText(Path.Combine(r.OutputDirectory, "signals.csv"), PerformanceReport.SignalsCsv(ds), bom);
+            File.WriteAllText(Path.Combine(r.OutputDirectory, "execution.md"), ExecutionDiagnostics(ds, r), bom);
+        }
+        if (options is not null)
+        {
+            // 어떤 설정으로 돌린 결과인지 (나중에 설정을 바꿔 비교할 때)
+            var json = System.Text.Json.JsonSerializer.Serialize(options, new System.Text.Json.JsonSerializerOptions(AnalyticsRecorder.Json) { WriteIndented = true });
+            File.WriteAllText(Path.Combine(r.OutputDirectory, "options.json"), json, new UTF8Encoding(false));
         }
         return r.OutputDirectory;
+    }
+
+    /// <summary>체결 품질 진단: 청산 유형별 기준가 대비 체결가, 빠른 손절 비율, 재생 정밀도</summary>
+    public static string ExecutionDiagnostics(AnalysisDataSet ds, BacktestResult r)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("# 체결 품질 진단");
+        sb.AppendLine($"재생 정밀도: 1분봉 구간당 {r.TicksPerLeg}개 체결 (1이면 봉 꼭짓점만 → 돌파는 봉 고가, 손절은 봉 저가에 체결되어 결과가 나빠짐)");
+        sb.AppendLine();
+        sb.AppendLine("## 청산 유형별 체결가 (청산 기준가 대비 %)");
+        sb.AppendLine("| 유형 | 건수 | 평균 | 중앙값 | 하위 10% | 최악 |");
+        sb.AppendLine("|---|---:|---:|---:|---:|---:|");
+        foreach (var g in ds.Trades.SelectMany(t => t.Exits).Where(l => l.TriggerPrice > 0).GroupBy(l => l.Kind).OrderByDescending(g => g.Count()))
+        {
+            var v = g.Select(l => (l.Price / l.TriggerPrice - 1m) * 100m).OrderBy(x => x).ToList();
+            sb.AppendLine($"| {PerformanceReport.ExitName(g.Key)} | {v.Count} | {v.Average():F3} | {v[v.Count / 2]:F3} | {v[v.Count / 10]:F3} | {v[0]:F2} |");
+        }
+        sb.AppendLine();
+        sb.AppendLine("## 전략별 보유 시간 · 빠른 손절");
+        sb.AppendLine("| 전략 | 거래 | 보유 중앙값(분) | 5분 안에 손절 | 기대값 |");
+        sb.AppendLine("|---|---:|---:|---:|---:|");
+        foreach (var g in ds.Trades.GroupBy(t => t.Strategy))
+        {
+            var holds = g.Select(t => t.HoldMinutes).OrderBy(x => x).ToList();
+            var fast = g.Count(t => t.FinalExitKind == ExitKind.StopLoss && t.HoldMinutes <= 5);
+            sb.AppendLine($"| {g.Key} | {g.Count()} | {holds[holds.Count / 2]:F1} | {fast} ({fast * 100 / g.Count()}%) | {Signed(g.Average(t => t.NetPct))}% |");
+        }
+        sb.AppendLine();
+        var gaps = ds.Trades.Where(t => t.Overnight && t.FinalExitKind == ExitKind.StopLoss).ToList();
+        if (gaps.Count > 0)
+            sb.AppendLine($"- 익일 보유 후 손절 {gaps.Count}건: 평균 {gaps.Average(t => t.NetPct):F2}%, 최악 {gaps.Min(t => t.NetPct):F2}% (갭하락은 실제로도 막을 수 없는 위험)");
+        sb.AppendLine("- 거래별 전후 1분봉은 trade_bars.jsonl 에 있습니다.");
+        return sb.ToString();
     }
 
     private static string Signed(decimal v) => v.ToString("+0.00;-0.00;0.00", Inv);

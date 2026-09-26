@@ -194,7 +194,7 @@ static async Task<int> BacktestAsync(string[] args, string? dataDir, string? sou
         var result = await new TossTrading.Engine.Backtest.BacktestRunner(provider, options, progress).RunAsync();
         Console.WriteLine();
         Console.WriteLine(TossTrading.Engine.Backtest.BacktestReport.Markdown(result));
-        Console.WriteLine($"저장: {TossTrading.Engine.Backtest.BacktestReport.Save(result)}");
+        Console.WriteLine($"저장: {TossTrading.Engine.Backtest.BacktestReport.Save(result, options)}");
         return 0;
     }
     finally

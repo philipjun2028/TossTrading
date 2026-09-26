@@ -20,6 +20,12 @@ public sealed class BacktestOptions
     /// <summary>하루에 분봉을 받아 재생할 최대 종목 수 (그날 고가 등락률·거래대금 조건을 넘은 종목 중 거래대금 상위)</summary>
     public int MaxSymbolsPerDay { get; set; } = 40;
 
+    /// <summary>
+    /// 재생 정밀도: 1분봉의 각 구간(시가→저가, 저가→고가, 고가→종가)을 몇 개 체결로 나눌지.
+    /// 1 이면 꼭짓점 4개만(빠르지만 돌파 진입이 봉 고가, 손절이 봉 저가에 체결되는 비현실적 결과).
+    /// </summary>
+    public int TicksPerLeg { get; set; } = 6;
+
     /// <summary>스캐너 실행 간격 (가상 시간, 분)</summary>
     public int ScanIntervalMinutes { get; set; } = 1;
 
@@ -58,7 +64,8 @@ public sealed record BacktestResult(
     IReadOnlyList<string> Warnings,
     string? OutputDirectory,
     TimeSpan Elapsed,
-    bool Canceled);
+    bool Canceled,
+    int TicksPerLeg = 1);
 
 /// <summary>
 /// 백테스트 실행기: 과거 데이터를 하루씩 ReplayMarket 으로 재생하면서 실제 TradingEngine(자동 운용·봇·리스크·모의체결)을 돌린다.
@@ -229,8 +236,15 @@ public sealed class BacktestRunner
                         for (var phase = 0; phase < ReplayMarket.PhasesPerMinute; phase++)
                         {
                             var t = minuteStart.AddSeconds(phase * ReplayMarket.PhaseSeconds);
-                            replay.AdvanceTo(t);
-                            replay.EmitPhase(minuteStart, phase);
+                            // 구간 중간 가격들: 체결마다 엔진이 처리를 끝낸 뒤 다음 가격 (손절·돌파가 제 가격에서 걸리도록)
+                            var subs = phase == 0 ? 1 : Math.Max(1, _o.TicksPerLeg);
+                            for (var sub = 1; sub <= subs; sub++)
+                            {
+                                var ts = phase == 0 ? t : t.AddSeconds(-ReplayMarket.PhaseSeconds + ReplayMarket.PhaseSeconds * (double)sub / subs);
+                                replay.AdvanceTo(ts);
+                                replay.EmitStep(minuteStart, phase, sub, subs);
+                                if (sub < subs) await engine.SettleAsync().ConfigureAwait(false);
+                            }
                             await StepAsync(engine, replay, t).ConfigureAwait(false);
                             if (phase == 0 && m % Math.Max(1, _o.ScanIntervalMinutes) == 0)
                             {
@@ -255,6 +269,7 @@ public sealed class BacktestRunner
                 await StepAsync(engine, replay, Kst.At(date, new TimeOnly(15, 35))).ConfigureAwait(false);
                 var snap = engine.Snapshot;
                 var dayTrades = snap.Trades.Skip(tradesBefore).ToList();
+                WriteTradeBars(replay, date, dayTrades, snap.Bots.Where(b => b.Quantity > 0).ToList());
                 var equity = (await paper.GetAccountSnapshotAsync(none).ConfigureAwait(false)).Equity;
                 equityPeak = Math.Max(equityPeak, equity);
                 if (equityPeak > 0) maxDd = Math.Max(maxDd, (equityPeak - equity) / equityPeak * 100m);
@@ -282,7 +297,7 @@ public sealed class BacktestRunner
         return new BacktestResult(_o.From, _o.To, _history.Name, _o.StartingCash, Math.Round(endEquity, 0), Math.Round(net, 0),
             _o.StartingCash > 0 ? Math.Round(net / _o.StartingCash * 100m, 3) : 0,
             Math.Round(trades.Sum(t => t.NetPnl), 0), Math.Round(maxDd, 3),
-            results, trades, open, _warnings.ToList(), _o.OutputDirectory, DateTime.UtcNow - started, canceled);
+            results, trades, open, _warnings.ToList(), _o.OutputDirectory, DateTime.UtcNow - started, canceled, _o.TicksPerLeg);
     }
 
     /// <summary>
@@ -309,6 +324,41 @@ public sealed class BacktestRunner
             list.Add((sym, amount));
         }
         return list.OrderByDescending(x => x.Amount).Take(Math.Max(1, _o.MaxSymbolsPerDay)).Select(x => x.Sym);
+    }
+
+    /// <summary>
+    /// 진단용: 그날 끝난 거래와 장 마감 때 보유 중인 종목의 1분봉(진입 10분 전 ~ 청산 10분 후)을 trade_bars.jsonl 에 남긴다.
+    /// 체결가가 봉과 맞는지, 손절이 노이즈였는지 나중에 확인할 수 있다.
+    /// </summary>
+    private void WriteTradeBars(ReplayMarket replay, DateOnly date, IReadOnlyList<ClosedTrade> closed, IReadOnlyList<BotView> holding)
+    {
+        if (_o.OutputDirectory is null) return;
+        try
+        {
+            var lines = new List<string>();
+            var open = Kst.At(date, Kst.MarketOpen);
+            var close = Kst.At(date, new TimeOnly(15, 30));
+            void Add(string kind, string symbol, string name, DateTimeOffset entry, DateTimeOffset? exit, object info)
+            {
+                var from = (Kst.DateOf(entry) == date ? entry : open).AddMinutes(-10);
+                var to = (exit ?? close).AddMinutes(10);
+                var bars = replay.DayBarsOf(symbol).Where(b => b.Start >= from && b.Start <= to)
+                    .Select(b => new { t = Kst.ToKst(b.Start).ToString("HH:mm"), o = b.Open, h = b.High, l = b.Low, c = b.Close, v = b.Volume });
+                lines.Add(System.Text.Json.JsonSerializer.Serialize(new { kind, date = date.ToString("yyyy-MM-dd"), symbol, name, info, bars },
+                    Analytics.AnalyticsRecorder.Json));
+            }
+            foreach (var t in closed)
+                Add("closed", t.Symbol, t.Name, t.EntryTime, t.ExitTime, new
+                {
+                    entry = Kst.ToKst(t.EntryTime).ToString("yyyy-MM-dd HH:mm:ss"), exit = Kst.ToKst(t.ExitTime).ToString("yyyy-MM-dd HH:mm:ss"),
+                    t.Strategy, t.AverageEntry, t.AverageExit, t.NetPct, t.EntryReason, t.ExitReason,
+                });
+            foreach (var b in holding)
+                Add("holding", b.Symbol, b.Name, open, null, new { b.Strategy, b.AveragePrice, b.Quantity, b.StateText });
+            if (lines.Count > 0)
+                File.AppendAllLines(Path.Combine(_o.OutputDirectory, "trade_bars.jsonl"), lines, new System.Text.UTF8Encoding(false));
+        }
+        catch (IOException) { /* 진단 기록 실패는 무시 */ }
     }
 
     private static async Task StepAsync(TradingEngine engine, ReplayMarket replay, DateTimeOffset t)

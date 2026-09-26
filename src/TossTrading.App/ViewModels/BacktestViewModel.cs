@@ -174,7 +174,7 @@ public sealed class BacktestViewModel : ViewModelBase
             });
             var ct = _cts.Token;
             var result = await Task.Run(() => new BacktestRunner(provider, options, progress).RunAsync(ct), ct);
-            await Task.Run(() => BacktestReport.Save(result));
+            await Task.Run(() => BacktestReport.Save(result, options));
             Show(result);
             Progress = 100;
             UpdateSummary(100, TimeSpan.Zero);

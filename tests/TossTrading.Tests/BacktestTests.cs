@@ -42,6 +42,30 @@ public class ReplayMarketTests
     }
 
     [Fact]
+    public void FillsInPricesBetweenBarCorners()
+    {
+        // 양봉 시가 10,000 → 저가 9,700 → 고가 10,300 → 종가 10,200 을 구간당 6체결로
+        var m = Market(B(0, 10_000, 10_300, 9_700, 10_200, 1_900));
+        var ticks = new List<TradeTick>();
+        m.Trade += ticks.Add;
+        m.SetSubscriptionsAsync(new[] { "A" }, Array.Empty<string>(), TestContext.Current.CancellationToken);
+        var minute0 = Kst.At(Day, Kst.MarketOpen);
+        m.EmitStep(minute0, 0, 1, 6);
+        for (var p = 1; p < 4; p++)
+            for (var i = 1; i <= 6; i++) m.EmitStep(minute0, p, i, 6);
+
+        var prices = ticks.Select(t => t.Price).ToList();
+        Assert.Equal(10_000m, prices[0]);
+        Assert.Equal(9_700m, prices[6]);                         // 저가 꼭짓점
+        Assert.Equal(10_300m, prices[12]);                       // 고가 꼭짓점
+        Assert.Equal(10_200m, prices[^1]);
+        // 저가→고가 사이를 건너뛰지 않는다: 이웃한 체결 간격이 구간의 1/6 (+1틱) 이하
+        for (var i = 7; i <= 12; i++) Assert.InRange(prices[i] - prices[i - 1], 0m, 110m);
+        Assert.Equal(1_900m, ticks.Sum(t => t.Volume));          // 거래량 합계 보존
+        Assert.All(prices, p => Assert.Equal(0m, p % TickRules.TickSize(p)));
+    }
+
+    [Fact]
     public void QueriesNeverSeeTheFuture()
     {
         var m = Market(B(0, 10_000, 10_300, 9_900, 10_200), B(1, 10_200, 10_250, 10_000, 10_050), B(2, 10_050, 10_060, 9_990, 10_000));
@@ -173,11 +197,15 @@ public class BacktestRunnerTests
             var md = BacktestReport.Markdown(result);
             Assert.Contains("수익률", md);
             Assert.Contains("2026-08-07", md);
-            var saved = BacktestReport.Save(result)!;
+            var saved = BacktestReport.Save(result, options)!;
+            Assert.True(File.Exists(Path.Combine(saved, "options.json")));
             Assert.True(File.Exists(Path.Combine(saved, "report.md")));
             Assert.True(File.Exists(Path.Combine(saved, "analysis.md")));
             Assert.Equal(result.Trades.Count + 1, File.ReadAllLines(Path.Combine(saved, "trades.csv")).Length);
             Assert.Equal(6, File.ReadAllLines(Path.Combine(saved, "daily.csv")).Length);
+            Assert.True(File.Exists(Path.Combine(saved, "execution.md")));
+            Assert.True(File.Exists(Path.Combine(saved, "trades_detail.csv")));
+            Assert.NotEmpty(File.ReadAllLines(Path.Combine(saved, "trade_bars.jsonl")));
         }
         finally
         {
