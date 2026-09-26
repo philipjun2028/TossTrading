@@ -293,6 +293,7 @@ public sealed class AutoPilot
             .Where(c => c.ClosingTotal > 0)                                  // 종가 모드 스캔 결과만
             .Where(c => c.ChangePct >= 0m && c.ChangePct < Plan.Settings.OvernightMaxChangePct)
             .Where(c => !(c.ChangePct > 8m && c.RangePosition is < 0.3m))
+            .Where(c => s.OvernightMaxRangePosition >= 1m || c.RangePosition is not { } rp || rp <= s.OvernightMaxRangePosition)
             .OrderByDescending(c => c.TradingAmount);
         foreach (var c in picks)
         {

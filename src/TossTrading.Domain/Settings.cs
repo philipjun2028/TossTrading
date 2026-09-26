@@ -356,6 +356,12 @@ public sealed class AutoPilotSettings
     /// </summary>
     public decimal OvernightMaxChangePct { get; set; } = 20m;
 
+    /// <summary>
+    /// 오버나잇 후보 당일 범위 위치 상한 (0~1, 1 = 끔). 고가 부근에서 끝나는 종목은 익일 시가가 약했다:
+    /// 토스 백테스트(2026-01~09) 범위 위치 0.65 초과 거래당 +0.22%·승률 49% vs 이하 +0.77%·승률 56% (상·하반기 모두)
+    /// </summary>
+    public decimal OvernightMaxRangePosition { get; set; } = 0.65m;
+
     /// <summary>종가 후보 조건 최소 통과 수 (0 = 전부 통과)</summary>
     public int ClosingMinPassed { get; set; }
 

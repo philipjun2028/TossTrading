@@ -290,12 +290,13 @@ public class AutoPilotTests
         var ap = new AutoPilot(_host, AutoPilotPlan.Default(enabled: true));          // 새 기본값: 오버나잇 바스켓 8종목, 60%
         _host.Equity = 8_000_000m;
         At(15, 6);
-        ScanCandidate C(string sym, decimal chg, decimal amount, decimal rp = 0.8m) =>
+        ScanCandidate C(string sym, decimal chg, decimal amount, decimal rp = 0.5m) =>
             Day(sym, 60) with { ChangePct = chg, TradingAmount = amount, RangePosition = rp, ClosingPassed = 3, ClosingTotal = 6 };
         _host.CandidateList = new()
         {
             C("A", 5, 50e9m), C("B", 12, 90e9m, rp: 0.2m) /* 급등 후 밀림 */, C("L", 29.5m, 80e9m) /* 상한가 */,
             C("N", -2, 70e9m) /* 하락 */, C("D", 1, 10e9m), C("E", 7, 60e9m),
+            C("H", 6, 95e9m, rp: 0.9m) /* 고가 마감 → 익일 시가 약함 */, C("X", 22, 85e9m) /* +20% 이상 */,
         };
         ap.OnTimer();
         Assert.Equal(new[] { "E", "A", "D" }, _host.BotList.Select(b => b.Symbol));      // 거래대금 순, 제외 조건 적용
