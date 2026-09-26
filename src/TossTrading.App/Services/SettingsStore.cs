@@ -119,7 +119,7 @@ public static class SettingsStore
     /// <summary>
     /// 종목 자동 선정으로 바뀐 뒤: 수동 진입 전용 프리셋은 쓸 곳이 없어 지우고, 나머지는 완전자동으로 맞춘다.
     /// </summary>
-    public const int CurrentVersion = 2;
+    public const int CurrentVersion = 3;
 
     public static void MigratePresets(AppSettings s)
     {
@@ -128,6 +128,25 @@ public static class SettingsStore
             // v2: 장중 VWAP 눌림은 백테스트(2026-01~09) PF 0.3 대 → 기본값이던 경우 "사용 안 함"으로
             if (s.AutoPilot.DayPreset == "VWAP 눌림 표준") s.AutoPilot.DayPreset = AutoPilotSettings.NoPreset;
             s.SettingsVersion = 2;
+        }
+        if (s.SettingsVersion < 3)
+        {
+            // v3: 봇·종목 수 확대. 사용자가 바꾸지 않은(이전 기본값 그대로인) 항목만 새 기본값으로
+            static void Bump<T>(T current, T oldDefault, T newDefault, Action<T> set) where T : IEquatable<T>
+            {
+                if (current.Equals(oldDefault)) set(newDefault);
+            }
+            var a = s.AutoPilot; var r = s.Risk; var sc = s.Scanner;
+            Bump(a.MaxDayBots, 3, 6, v => a.MaxDayBots = v);
+            Bump(a.MaxClosingBots, 2, 4, v => a.MaxClosingBots = v);
+            Bump(a.IdleReplaceMinutes, 30, 20, v => a.IdleReplaceMinutes = v);
+            Bump(r.MaxConcurrentPositions, 4, 10, v => r.MaxConcurrentPositions = v);
+            Bump(r.MaxTotalExposurePct, 60m, 90m, v => r.MaxTotalExposurePct = v);
+            Bump(r.DailyLossLimitPct, 1.5m, 2.0m, v => r.DailyLossLimitPct = v);
+            Bump(r.MaxConsecutiveLosses, 4, 6, v => r.MaxConsecutiveLosses = v);
+            Bump(sc.MaxCandidates, 30, 40, v => sc.MaxCandidates = v);
+            Bump(sc.LiveSubscribeTop, 20, 30, v => sc.LiveSubscribeTop = v);
+            s.SettingsVersion = 3;
         }
         foreach (var name in s.Presets.Where(kv => kv.Value.Strategy == EntryStrategyKind.Manual).Select(kv => kv.Key).ToList())
             s.Presets.Remove(name);

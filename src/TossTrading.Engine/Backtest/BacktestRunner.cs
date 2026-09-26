@@ -18,7 +18,7 @@ public sealed class BacktestOptions
     public CostSettings Cost { get; set; } = new();
 
     /// <summary>하루에 분봉을 받아 재생할 최대 종목 수 (그날 고가 등락률·거래대금 조건을 넘은 종목 중 거래대금 상위)</summary>
-    public int MaxSymbolsPerDay { get; set; } = 40;
+    public int MaxSymbolsPerDay { get; set; } = 60;
 
     /// <summary>
     /// 재생 정밀도: 1분봉의 각 구간(시가→저가, 저가→고가, 고가→종가)을 몇 개 체결로 나눌지.
