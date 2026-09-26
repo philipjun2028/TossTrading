@@ -268,3 +268,39 @@ public class EtaEstimatorTests
     [InlineData(3_900, "1시간 5분")]
     public void FormatsKorean(int seconds, string expected) => Assert.Equal(expected, EtaEstimator.Format(TimeSpan.FromSeconds(seconds)));
 }
+
+public class ResearchDataTests
+{
+    [Fact]
+    public async Task ExportedDataReproducesTheSameBacktest()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var root = Path.Combine(Path.GetTempPath(), "tt-rd-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var cache = Path.Combine(root, "history");
+            var synthetic = new SyntheticHistoryProvider(seed: 5, symbolCount: 30);
+            var cached = new CachedHistoryProvider(synthetic, cache, () => new DateOnly(2026, 9, 1));
+            BacktestOptions Options(string dir) => new()
+            {
+                From = new DateOnly(2026, 8, 3), To = new DateOnly(2026, 8, 5), MaxSymbolsPerDay = 10, OutputDirectory = dir,
+            };
+            var a = await new BacktestRunner(cached, Options(Path.Combine(root, "a"))).RunAsync(ct);   // 캐시 채움
+
+            var export = Path.Combine(root, "export");
+            var summary = ResearchData.Export(cache, export);
+            Assert.Equal(30, summary.Symbols);
+            Assert.True(summary.MinuteRows > 1_000);
+            Assert.True(File.Exists(Path.Combine(export, "minute_202608.csv.gz")));
+            Assert.Contains("가온", File.ReadAllText(Path.Combine(export, "universe.csv")));          // 이름도 보존
+
+            var b = await new BacktestRunner(new ExportedHistoryProvider(export), Options(Path.Combine(root, "b"))).RunAsync(ct);
+            Assert.Equal(a.Trades.Count, b.Trades.Count);
+            Assert.Equal(a.EndingEquity, b.EndingEquity);
+        }
+        finally
+        {
+            try { Directory.Delete(root, true); } catch { }
+        }
+    }
+}

@@ -44,6 +44,7 @@ public sealed class BacktestViewModel : ViewModelBase
         RunCommand = new AsyncCommand(RunAsync, () => !IsRunning);
         CancelCommand = new DelegateCommand(() => _cts?.Cancel(), () => IsRunning);
         OpenFolderCommand = new DelegateCommand(OpenFolder);
+        ExportDataCommand = new AsyncCommand(ExportDataAsync, () => !IsRunning);
     }
 
     public IReadOnlyList<ChoiceOption<string>> SourceOptions { get; } = new[]
@@ -79,6 +80,7 @@ public sealed class BacktestViewModel : ViewModelBase
         {
             RunCommand.RaiseCanExecuteChanged();
             CancelCommand.RaiseCanExecuteChanged();
+            ExportDataCommand?.RaiseCanExecuteChanged();
             RaisePropertyChanged(nameof(IsIdle));
         });
     }
@@ -114,6 +116,42 @@ public sealed class BacktestViewModel : ViewModelBase
     public AsyncCommand RunCommand { get; }
     public DelegateCommand CancelCommand { get; }
     public DelegateCommand OpenFolderCommand { get; }
+    public AsyncCommand ExportDataCommand { get; }
+
+    public static string ResearchExportDirectory => Path.Combine(SettingsStore.DataDirectory, "research_export");
+
+    /// <summary>
+    /// 백테스트 때 받아 둔 과거 데이터(분봉·일봉)를 연구용으로 압축해 내보낸다.
+    /// 거래 로그만으로는 "다른 규칙이었다면?"을 시험할 수 없어서, 원본 데이터를 알고리즘 개선에 쓰기 위함.
+    /// </summary>
+    private async Task ExportDataAsync()
+    {
+        IsRunning = true;
+        Progress = 0;
+        _eta.Reset(DateTime.UtcNow);
+        try
+        {
+            var progress = new Progress<BacktestProgress>(p =>
+            {
+                Progress = p.Overall;
+                ProgressText = $"[내보내기] {p.Message}";
+                UpdateSummary(p.Overall, _eta.Update(DateTime.UtcNow, p.Overall));
+            });
+            var s = await Task.Run(() => ResearchData.Export(HistoryCacheDirectory, ResearchExportDirectory, progress: progress));
+            ProgressSummary = "내보내기 완료";
+            ProgressText = $"종목 {s.Symbols:N0} · 분봉 {s.MinuteRows:N0}행 ({s.From:yyyy-MM-dd}~{s.To:yyyy-MM-dd}) · {s.Bytes / 1024.0 / 1024.0:F1}MB → {s.Directory}";
+            try { Process.Start(new ProcessStartInfo { FileName = s.Directory, UseShellExecute = true }); } catch { }
+        }
+        catch (Exception ex)
+        {
+            ProgressText = $"내보내기 실패: {ex.Message}";
+            DXMessageBox.Show(ex.Message, "연구용 데이터 내보내기");
+        }
+        finally
+        {
+            IsRunning = false;
+        }
+    }
 
     private async Task RunAsync()
     {

@@ -13,6 +13,7 @@ var sourceOpt = OptionValue(ref args, "--source");
 var symbolsOpt = OptionValue(ref args, "--symbols");
 var cashOpt = OptionValue(ref args, "--cash");
 var pathOpt = OptionValue(ref args, "--path");
+var outOpt = OptionValue(ref args, "--out");
 var cmd = args.FirstOrDefault()?.ToLowerInvariant();
 
 return cmd switch
@@ -22,6 +23,7 @@ return cmd switch
                             closing: args.Length > 3 && args[3].Equals("closing", StringComparison.OrdinalIgnoreCase), dataDir,
                             auto: args.Length > 3 && args[3].Equals("auto", StringComparison.OrdinalIgnoreCase)),
     "backtest" => await BacktestAsync(args, dataDir, sourceOpt, symbolsOpt, cashOpt, pathOpt),
+    "export-data" => ExportData(dataDir, outOpt),
     "report" => Report(args.Length > 1 ? int.Parse(args[1]) : 30, dataDir, sourceOpt),
     _ => Usage(),
 };
@@ -52,6 +54,8 @@ static int Usage()
                              예) backtest 2026-08-01 2026-08-31 --source toss --cash 10000000
                              --source toss (TOSS_CLIENT_ID/SECRET 필요) | synthetic (가상 데이터, 기본)
                              --symbols 005930,000660 (추가 종목), --path nearest (봉 내부: 시가에서 가까운 극값 먼저), 결과: <데이터폴더>\backtests\<실행시각>\
+          export-data        과거 데이터 캐시(<데이터폴더>\history)를 연구용으로 압축 (--out <폴더>, 기본 <데이터폴더>\research_export)
+                             backtest ... --source export:<폴더> 로 네트워크 없이 백테스트
           report [일수]      최근 N일(기본 30) 분석 기록으로 성과 리포트 + 개선 제안 생성
                              --data <폴더> (기본: %LocalAppData%\TossTrading), --source sim|toss
                              결과: <폴더>\reports\report_*.md, trades_*.csv, signals_*.csv
@@ -153,6 +157,21 @@ static int Report(int days, string? dataDir, string? source)
     return 0;
 }
 
+static int ExportData(string? dataDir, string? outDir)
+{
+    dataDir ??= Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "TossTrading");
+    outDir ??= Path.Combine(dataDir, "research_export");
+    var last = -1;
+    var summary = TossTrading.Engine.Backtest.ResearchData.Export(Path.Combine(dataDir, "history"), outDir, progress: new Progress<TossTrading.Engine.Backtest.BacktestProgress>(p =>
+    {
+        var pct = (int)p.Overall / 10;
+        if (pct != last) { last = pct; Console.WriteLine($"{p.Overall,5:0}% {p.Message}"); }
+    }));
+    Console.WriteLine($"종목 {summary.Symbols:N0} · 일봉 {summary.DailyRows:N0}행 · 분봉 {summary.MinuteRows:N0}행 ({summary.From}~{summary.To}) · {summary.Bytes / 1024.0 / 1024.0:F1}MB");
+    Console.WriteLine($"저장: {summary.Directory}");
+    return 0;
+}
+
 static async Task<int> BacktestAsync(string[] args, string? dataDir, string? source, string? symbols, string? cash, string? path)
 {
     if (args.Length < 3 || !DateOnly.TryParse(args[1], out var from) || !DateOnly.TryParse(args[2], out var to))
@@ -172,7 +191,11 @@ static async Task<int> BacktestAsync(string[] args, string? dataDir, string? sou
 
     TossConnection? conn = null;
     IHistoryProvider provider;
-    if (source?.ToLowerInvariant() == "toss")
+    if (source is not null && source.StartsWith("export:", StringComparison.OrdinalIgnoreCase))
+    {
+        provider = new TossTrading.Engine.Backtest.ExportedHistoryProvider(source["export:".Length..]);
+    }
+    else if (source?.ToLowerInvariant() == "toss")
     {
         var id = Environment.GetEnvironmentVariable("TOSS_CLIENT_ID");
         var secret = Environment.GetEnvironmentVariable("TOSS_CLIENT_SECRET");

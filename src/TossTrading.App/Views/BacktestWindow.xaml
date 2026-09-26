@@ -39,6 +39,8 @@
                         <Button Content="▶ 실행" Command="{Binding RunCommand}" Margin="3" Padding="18,4" FontWeight="SemiBold" />
                         <Button Content="■ 취소" Command="{Binding CancelCommand}" Margin="3" Padding="12,4" />
                         <Button Content="📂 결과 폴더" Command="{Binding OpenFolderCommand}" Margin="3" Padding="10,4" />
+                        <Button Content="📦 연구용 데이터 내보내기" Command="{Binding ExportDataCommand}" Margin="3" Padding="10,4"
+                                ToolTip="백테스트 때 받아 둔 토스 과거 분봉·일봉을 압축해 research_export 폴더에 저장합니다.&#x0a;저장소에 올리면 같은 데이터로 여러 전략·설정을 비교해 알고리즘을 개선할 수 있습니다." />
                     </StackPanel>
                     <TextBlock Text="추가 종목 코드" VerticalAlignment="Center" Margin="4,0" />
                     <dxe:TextEdit Margin="3" EditValue="{Binding ExtraSymbols, UpdateSourceTrigger=PropertyChanged}"

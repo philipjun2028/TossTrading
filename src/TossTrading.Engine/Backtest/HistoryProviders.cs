@@ -173,7 +173,26 @@ public sealed class CachedHistoryProvider : IHistoryProvider
     public int Hits { get; private set; }
     public int Misses { get; private set; }
 
-    public Task<IReadOnlyList<StockInfo>> GetUniverseAsync(CancellationToken ct) => _inner.GetUniverseAsync(ct);
+    /// <summary>종목 목록은 매번 새로 받되(상장·폐지 반영) 이름을 연구용 내보내기에 쓰도록 저장해 둔다</summary>
+    public async Task<IReadOnlyList<StockInfo>> GetUniverseAsync(CancellationToken ct)
+    {
+        var path = Path.Combine(_dir, "universe.json");
+        try
+        {
+            var list = await _inner.GetUniverseAsync(ct).ConfigureAwait(false);
+            if (list.Count > 0)
+            {
+                var merged = (Read<List<StockInfo>>(path) ?? new()).ToDictionary(u => u.Symbol);
+                foreach (var u in list) merged[u.Symbol] = u;
+                Write(path, merged.Values.OrderBy(u => u.Symbol, StringComparer.Ordinal).ToList());
+            }
+            return list;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException && Read<List<StockInfo>>(path) is { Count: > 0 })
+        {
+            return Read<List<StockInfo>>(path)!; // 네트워크 실패 시 저장된 목록
+        }
+    }
 
     public async Task<IReadOnlyList<Bar>> GetDailyBarsAsync(string symbol, DateOnly to, int count, CancellationToken ct)
     {
